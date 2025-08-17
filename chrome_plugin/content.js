@@ -2,54 +2,80 @@
   console.log('Script de prospection LinkedIn chargé !');
   
   const checkAndConnect = () => {
-    // PRIORITY 1: Try to follow company first (Suivre button)
-    const followButton = Array.from(document.querySelectorAll('button.follow'))
-      .find(btn => btn.getAttribute('aria-label') === 'Suivre');
+    const currentUrl = window.location.href;
+    const isCompanyPage = currentUrl.includes('/company/');
+    
+    if (isCompanyPage) {
+      console.log("📄 Page entreprise détectée, recherche du bouton Suivre...");
+      
+      // PRIORITY 1: Try to follow company (Suivre button) - only on company pages
+      const followButton = Array.from(document.querySelectorAll('button.follow'))
+        .find(btn => btn.getAttribute('aria-label') === 'Suivre');
 
-    if (followButton && !followButton.disabled) {
-      followButton.click();
-      console.log("✅ Bouton Suivre (company) cliqué - priorité 1.");
-      chrome.runtime.sendMessage({action: "close_tab"});
+      if (followButton && !followButton.disabled) {
+        followButton.click();
+        console.log("✅ Bouton Suivre (company) cliqué - priorité 1.");
+        chrome.runtime.sendMessage({action: "close_tab"});
+        return;
+      }
+
+      // Try alternative follow button selector for companies
+      const followButtonAlt = Array.from(document.querySelectorAll('button'))
+        .find(btn => {
+          const text = btn.textContent?.trim();
+          return text === 'Suivre' && btn.classList.contains('follow');
+        });
+
+      if (followButtonAlt && !followButtonAlt.disabled) {
+        followButtonAlt.click();
+        console.log("✅ Bouton Suivre alternatif (company) cliqué - priorité 1.");
+        chrome.runtime.sendMessage({action: "close_tab"});
+        return;
+      }
+
+      // Try broader follow button detection for companies
+      const followButtonBroad = Array.from(document.querySelectorAll('button'))
+        .find(btn => {
+          const text = btn.textContent?.trim();
+          const ariaLabel = btn.getAttribute('aria-label');
+          return text === 'Suivre' || 
+                 (ariaLabel && ariaLabel.includes('Suivre'));
+        });
+
+      if (followButtonBroad && !followButtonBroad.disabled) {
+        followButtonBroad.click();
+        console.log("✅ Bouton Suivre général (company) cliqué - priorité 1.");
+        chrome.runtime.sendMessage({action: "close_tab"});
+        return;
+      }
+      
+      // If no follow button found on company page, log and retry
+      console.log("⏳ Aucun bouton Suivre trouvé sur la page entreprise, nouvelle tentative dans 1 seconde...");
+      setTimeout(checkAndConnect, 1000);
       return;
     }
-
-    // Try alternative follow button selector for companies
-    const followButtonAlt = Array.from(document.querySelectorAll('button'))
-      .find(btn => {
-        const text = btn.textContent?.trim();
-        return text === 'Suivre' && btn.classList.contains('follow');
-      });
-
-    if (followButtonAlt && !followButtonAlt.disabled) {
-      followButtonAlt.click();
-      console.log("✅ Bouton Suivre alternatif (company) cliqué - priorité 1.");
-      chrome.runtime.sendMessage({action: "close_tab"});
-      return;
-    }
-
-    // Try broader follow button detection for companies
-    const followButtonBroad = Array.from(document.querySelectorAll('button'))
-      .find(btn => {
-        const text = btn.textContent?.trim();
-        const ariaLabel = btn.getAttribute('aria-label');
-        return text === 'Suivre' || 
-               (ariaLabel && ariaLabel.includes('Suivre'));
-      });
-
-    if (followButtonBroad && !followButtonBroad.disabled) {
-      followButtonBroad.click();
-      console.log("✅ Bouton Suivre général (company) cliqué - priorité 1.");
-      chrome.runtime.sendMessage({action: "close_tab"});
-      return;
-    }
-
-    // PRIORITY 2: If no company follow button found, try to connect with employee
+    
+    // PRIORITY 2: For non-company pages (employee profiles), try to connect
     const connectButton = Array.from(document.querySelectorAll('button'))
       .find(btn => {
         const text = btn.textContent?.trim();
         const ariaLabel = btn.getAttribute('aria-label');
-        return text === 'Se connecter' || 
-               (ariaLabel && ariaLabel.includes('rejoindre votre réseau'));
+        const spanText = btn.querySelector('span.artdeco-button__text')?.textContent?.trim();
+        
+        // Check for "Se connecter" text in button content or spans
+        const hasConnectText = text === 'Se connecter' || spanText === 'Se connecter';
+        
+        // Check for aria-label patterns
+        const hasConnectAriaLabel = ariaLabel && (
+          ariaLabel.includes('rejoindre votre réseau') ||
+          ariaLabel.includes('Invitez') ||
+          ariaLabel.toLowerCase().includes('connect')
+        );
+        
+        // Check if it's a primary artdeco button (typical for connect buttons)
+        const isPrimaryButton = btn.classList.contains('artdeco-button--primary');
+        
+        return hasConnectText || (hasConnectAriaLabel && isPrimaryButton);
       });
 
     if (connectButton && !connectButton.disabled) {
@@ -83,8 +109,8 @@
       return;
     }
 
-    // If neither button found, wait and retry
-    console.log("⏳ Aucun bouton trouvé (ni Suivre ni Se connecter), nouvelle tentative dans 1 seconde...");
+    // If no connect button found on employee profile, wait and retry
+    console.log("👤 Page profil détectée - ⏳ Aucun bouton Se connecter trouvé, nouvelle tentative dans 1 seconde...");
     setTimeout(checkAndConnect, 1000);
   };
 
