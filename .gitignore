@@ -1,3 +1,6 @@
 ./src/prospection_data.db
 ./src/prospection_data8old.db
 .idea/
+.DS_Store
+prospection_data.db
+src/__pycache__/*
