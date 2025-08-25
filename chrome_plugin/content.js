@@ -3,6 +3,14 @@
   
   const checkAndConnect = () => {
     const currentUrl = window.location.href;
+    
+    // Check if URL contains 'unavailable' and close tab immediately
+    if (currentUrl.includes('unavailable')) {
+      console.log("❌ Page indisponible détectée, fermeture immédiate du tab.");
+      chrome.runtime.sendMessage({action: "close_tab"});
+      return;
+    }
+    
     const isCompanyPage = currentUrl.includes('/company/');
     
     if (isCompanyPage) {
