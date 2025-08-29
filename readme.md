@@ -17,12 +17,72 @@ This Python project automates LinkedIn prospection by:
 pip install -r requirements.txt
 ```
 
-### Step 2: Load Your Data
-Parse your CSV files from Mantiks and BuiltWith:
+### Step 2: Prepare and Load Your Data
+
+#### **Configure Data Sources**
+Before running the parser, update the file paths in `src/main_parse_files.py`:
+
+1. **BuiltWith Data** (lines 17-20):
+   ```python
+   builtwith_dir = '/Users/YOUR_USERNAME/Builtwith'  # Update this path
+   ```
+   
+2. **Mantiks Data** (line 42):
+   ```python
+   dir = '/Users/YOUR_USERNAME/Mantiks'  # Update this path
+   ```
+
+#### **Required File Structure**
+The parser expects specific CSV files in each directory (examples bellow):
+
+**BuiltWith Directory** (`/Users/YOUR_USERNAME/Builtwith/`):
+- `React-websites-in-France.csv`
+- `React-websites-in-Germany.csv`
+- `React-websites-in-the-United-Kingdom.csv`
+
+**Mantiks Directory** (`/Users/YOUR_USERNAME/Mantiks/`):
+- `Développeur React Freelance Moins De 1000 Salarié.csv`
+- `Node.Js - 6 mois à partir du 23_02_2025.csv`
+- `Node.JS - Freelance Entreprise De Moins De 1000 Salariés.csv`
+- `Node.JS - Télétravail Entreprise De Moins De 1000 Salariés.csv`
+- `React - Entreprise de 1 à 10000 salariés sur 6 mois à partir du 13_02_2025.csv`
+- `React Native - All TIME.csv`
+- `React Native Freelance - Entreprise De Moins De 1000 Salariés.csv`
+- `React Native Télétravail - Entreprise De Moins De 1000 Salariés.csv`
+- `React Télétravail CDI Entreprise De Moins De 1000 Salariés En France.csv`
+
+#### **Expected CSV Column Structure**
+
+**BuiltWith CSV Format:**
+- `Company` - Company name
+- `Linkedin` - Company LinkedIn URL
+
+**Mantiks CSV Format** (varies by file):
+- `Company name` / `Nom de l'entreprise` - Company name
+- `Company LinkedIn` / `LinkedIn Entreprise` - Company LinkedIn URL  
+- `LinkedIn profil` / `Profile LinkedIn` / `Company LinkedIn Employees` - Employee LinkedIn URLs
+
+#### **Run the Data Parser**
 ```bash
 python src/main_parse_files.py
 ```
-This creates a local SQLite database (`prospection_data.db`) with all your prospects.
+
+**What this does:**
+- ✅ Creates/updates `prospection_data.db` SQLite database
+- 📊 Processes 3 BuiltWith files + 9 Mantiks files
+- 🏢 Extracts company information and LinkedIn URLs
+- 👥 Extracts employee LinkedIn profiles (from Mantiks data)
+- 📝 Provides detailed logging of processing progress
+- 🔄 Supports incremental updates (won't duplicate existing data)
+
+**Expected Output:**
+```
+Processing Builtwith file: React-websites-in-France.csv
+Found 1,245 companies in React-websites-in-France.csv
+Adding company to DB: Acme Corp
+...
+Completed processing React-websites-in-France.csv
+```
 
 ### Step 3: Install Chrome Extension (Recommended)
 1. Open Chrome and go to `chrome://extensions/`

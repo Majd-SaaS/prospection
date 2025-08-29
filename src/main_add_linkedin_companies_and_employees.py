@@ -171,7 +171,7 @@ def auto_add_employees_with_total_limit(max_nb_employees_to_add: int) -> int:
         
         # Random delay between 1-3 seconds for each employee
         if i < len(employees_to_add) - 1:  # Don't delay after the last one
-            delay = random.uniform(1.0, 3.0)
+            delay = random.uniform(3.0, 6.0)
             print(f'    ⏱️  Random delay: {delay:.1f}s')
             time.sleep(delay)
     
