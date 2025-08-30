@@ -57,10 +57,77 @@ The parser expects specific CSV files in each directory (examples bellow):
 - `Company` - Company name
 - `Linkedin` - Company LinkedIn URL
 
-**Mantiks CSV Format** (varies by file):
-- `Company name` / `Nom de l'entreprise` - Company name
-- `Company LinkedIn` / `LinkedIn Entreprise` - Company LinkedIn URL  
-- `LinkedIn profil` / `Profile LinkedIn` / `Company LinkedIn Employees` - Employee LinkedIn URLs
+**Mantiks CSV Format** - **3 Required Column Types** (exact column names vary by file):
+
+1. **Company Name Column** (REQUIRED):
+   - Possible names: `Company name`, `Nom de l'entreprise`
+   - Contains the company/organization name
+   - Example: "Acme Corp", "TechStart SAS"
+
+2. **Company LinkedIn URL Column** (REQUIRED):
+   - Possible names: `Company LinkedIn`, `LinkedIn Entreprise`
+   - Contains the LinkedIn company page URL
+   - Example: "https://linkedin.com/company/acme-corp"
+
+3. **Employee LinkedIn URL Column** (OPTIONAL):
+   - Possible names: `LinkedIn profil`, `Profile LinkedIn`, `Company LinkedIn Employees`
+   - Contains individual employee LinkedIn profile URLs
+   - Example: "https://linkedin.com/in/john-doe-123456"
+   - **Note**: Use empty string `''` if your CSV file doesn't have employee profiles
+
+**⚠️ Important Notes:**
+- Column names are **case-insensitive** (parser converts to lowercase)
+- All three column parameters are required in `MantiksCSVParser()`, but employee column can be empty string
+- CSV files should be comma-separated (`,`)
+- Missing or null values in company columns will be filtered out automatically
+
+#### **How to Configure MantiksCSVParser for Your CSV Files**
+
+To use `MantiksCSVParser` with your own CSV files, you need to identify the correct column names and update `src/main_parse_files.py`:
+
+**Example Configuration:**
+```python
+# If your CSV has these columns: "Enterprise Name", "Company URL", "Employee Profiles"
+mantiks_parser = MantiksCSVParser(
+    file_path='your_file.csv',
+    company_name_column='Enterprise Name',      # Column with company names
+    company_link_column='Company URL',          # Column with company LinkedIn URLs
+    employee_link_column='Employee Profiles'   # Column with employee LinkedIn URLs
+)
+
+# If your CSV only has company data (no employee profiles)
+mantiks_parser = MantiksCSVParser(
+    file_path='companies_only.csv',
+    company_name_column='Company Name',
+    company_link_column='LinkedIn URL',
+    employee_link_column=''                     # Empty string for no employee data
+)
+```
+
+**Step-by-step:**
+1. Open your CSV file and identify the column headers
+2. Find which column contains company names → use for `company_name_column`
+3. Find which column contains company LinkedIn URLs → use for `company_link_column`
+4. Find which column contains employee LinkedIn URLs → use for `employee_link_column` (or `''` if none)
+5. Update the configuration in `load_mantiks_files()` function
+
+**Current Examples in `main_parse_files.py`:**
+```python
+# Example configurations already in the code:
+parsers_info = [
+    # French column names, with employee profiles
+    (file1, 'Company name', 'Company LinkedIn', 'LinkedIn profil', 'Description'),
+    
+    # French column names, NO employee profiles (empty string)
+    (file2, 'Nom de l\'entreprise', 'LinkedIn Entreprise', '', 'Description'),
+    
+    # Different employee column name
+    (file4, 'Company name', 'Company LinkedIn', 'Company LinkedIn Employees', 'Description'),
+    
+    # Another employee column variation
+    (file5, 'Nom de l\'entreprise', 'LinkedIn Entreprise', 'Profile LinkedIn', 'Description'),
+]
+```
 
 #### **Run the Data Parser**
 ```bash
