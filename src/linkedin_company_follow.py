@@ -16,6 +16,7 @@ try:  # pragma: no cover - fallback used only when Selenium is absent (unit test
 except ModuleNotFoundError:  # pragma: no cover
     class _FallbackBy:
         TAG_NAME = "tag name"
+        CSS_SELECTOR = "css selector"
 
     By = _FallbackBy()
 
@@ -25,6 +26,20 @@ except ModuleNotFoundError:  # pragma: no cover
 # below are normalised to lowercase to simplify comparisons.
 FOLLOW_KEYWORDS: Set[str] = {"follow", "follow company"}
 FOLLOWING_KEYWORDS: Set[str] = {"following"}
+
+AUTH_WALL_KEYWORDS: Set[str] = {
+    "authwall",
+    "checkpoint",
+    "checkpoint/challenge",
+}
+
+LOGIN_FORM_SELECTORS: tuple[str, ...] = (
+    "input[name='session_key']",
+    "input[name='session_password']",
+    "form.login__form",
+    "form[action*='login']",
+    "button[data-litms-control-urn='login-submit']",
+)
 
 
 @dataclass(frozen=True)
@@ -158,4 +173,30 @@ def merge_unique_urls(sequences: Sequence[Iterable[str]]) -> Sequence[str]:
             seen.add(url)
 
     return ordered
+
+
+def detect_login_required(driver) -> Optional[str]:  # type: ignore[no-untyped-def]
+    """Detect whether LinkedIn redirected to an authentication wall or login form."""
+
+    current_url = (getattr(driver, "current_url", "") or "").lower()
+    if any(keyword in current_url for keyword in AUTH_WALL_KEYWORDS):
+        return (
+            "LinkedIn redirected to an authentication wall. Ensure the Chrome profile is authenticated."
+        )
+
+    css_selector = getattr(By, "CSS_SELECTOR", "css selector")
+    if not isinstance(css_selector, str):  # pragma: no cover - defensive for mocked By objects.
+        css_selector = "css selector"
+
+    try:
+        for selector in LOGIN_FORM_SELECTORS:
+            elements = driver.find_elements(css_selector, selector)
+            if elements:
+                return (
+                    "LinkedIn is showing a login form. Provide a Chrome profile that is already signed in."
+                )
+    except Exception:  # pragma: no cover - Selenium specific failures are ignored.
+        return None
+
+    return None
 

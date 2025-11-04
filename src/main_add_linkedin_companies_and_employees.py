@@ -31,6 +31,7 @@ from selenium.webdriver.remote.webelement import WebElement
 
 from src.linkedin_company_follow import (
     ButtonSnapshot,
+    detect_login_required,
     evaluate_button_state,
     merge_unique_urls,
     normalise_company_url,
@@ -178,6 +179,10 @@ def process_url(driver: webdriver.Chrome, url: str, args: argparse.Namespace) ->
     except WebDriverException as exc:
         return FollowResult(url=normalised_url, status="error", reason=str(exc))
 
+    login_issue = detect_login_required(driver)
+    if login_issue:
+        return FollowResult(url=normalised_url, status="error", reason=login_issue)
+
     located = find_follow_button(driver)
     if located is None:
         return FollowResult(url=normalised_url, status="error", reason="Follow button not found")
@@ -195,6 +200,9 @@ def process_url(driver: webdriver.Chrome, url: str, args: argparse.Namespace) ->
         return FollowResult(url=normalised_url, status="follow")
     if outcome == "already followed":
         return FollowResult(url=normalised_url, status="already followed")
+    login_issue = detect_login_required(driver)
+    if login_issue:
+        return FollowResult(url=normalised_url, status="error", reason=login_issue)
     return FollowResult(url=normalised_url, status="error", reason="Unable to confirm follow action")
 
 

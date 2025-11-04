@@ -29,6 +29,9 @@ company follow operations.
 - **Automation friendly exit codes:** the CLI returns a non-zero exit status
   whenever at least one URL fails so that orchestration tooling can detect
   problems easily.
+- **Auth wall detection:** gracefully reports when LinkedIn redirects to a
+  login or checkpoint page so remote jobs can surface misconfigured Chrome
+  profiles immediately.
 
 ---
 
@@ -71,7 +74,9 @@ python src/main_add_linkedin_companies_and_employees.py \
 If the company is already followed, the script reports `already followed`. If
 not, it will click the **Follow** button and return `follow` after confirming
 the state change. Errors (missing buttons, timeouts, etc.) are reported with a
-helpful reason string.
+helpful reason string. Authentication problems are surfaced as
+`LinkedIn redirected to an authentication wall` or `LinkedIn is showing a login
+form`, letting you know that the referenced Chrome profile is not logged in.
 
 ### Reading URLs from a file or STDIN
 

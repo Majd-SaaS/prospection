@@ -1,7 +1,9 @@
 import unittest
+from typing import Optional
 
 from src.linkedin_company_follow import (
     ButtonSnapshot,
+    detect_login_required,
     evaluate_button_state,
     merge_unique_urls,
     normalise_company_url,
@@ -78,6 +80,34 @@ class MergeUniqueUrlsTests(unittest.TestCase):
             "https://c/",
             "https://d/",
         ])
+
+
+class DetectLoginRequiredTests(unittest.TestCase):
+    class StubDriver:
+        def __init__(self, current_url: str = "", selectors: Optional[dict[tuple[str, str], list[object]]] = None):
+            self.current_url = current_url
+            self._selectors = selectors or {}
+
+        def find_elements(self, by, selector):  # noqa: D401 - simple stub
+            key = (str(by), selector)
+            return self._selectors.get(key, [])
+
+    def test_detects_authwall_in_url(self):
+        driver = self.StubDriver(current_url="https://www.linkedin.com/authwall")
+        message = detect_login_required(driver)
+        self.assertIsNotNone(message)
+        self.assertIn("authentication wall", message)
+
+    def test_detects_login_form_elements(self):
+        selectors = {("css selector", "input[name='session_key']"): [object()]}
+        driver = self.StubDriver(current_url="https://www.linkedin.com/", selectors=selectors)
+        message = detect_login_required(driver)
+        self.assertIsNotNone(message)
+        self.assertIn("login form", message)
+
+    def test_returns_none_when_page_is_accessible(self):
+        driver = self.StubDriver(current_url="https://www.linkedin.com/company/example/")
+        self.assertIsNone(detect_login_required(driver))
 
 
 if __name__ == "__main__":  # pragma: no cover
