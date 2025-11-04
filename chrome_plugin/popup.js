@@ -1,9 +1,18 @@
-const toggle = document.getElementById("toggle");
+const toggle = document.getElementById('toggle');
+const statusText = document.getElementById('status');
 
-chrome.storage.local.get("enabled", ({ enabled }) => {
-  toggle.checked = enabled;
+const updateStatusLabel = (isEnabled) => {
+  statusText.textContent = isEnabled ? 'Automation is enabled' : 'Automation is paused';
+};
+
+chrome.storage.local.get({ enabled: true }, ({ enabled }) => {
+  const isEnabled = Boolean(enabled);
+  toggle.checked = isEnabled;
+  updateStatusLabel(isEnabled);
 });
 
-toggle.addEventListener("change", () => {
-  chrome.storage.local.set({ enabled: toggle.checked });
+toggle.addEventListener('change', () => {
+  const isEnabled = toggle.checked;
+  chrome.storage.local.set({ enabled: isEnabled });
+  updateStatusLabel(isEnabled);
 });

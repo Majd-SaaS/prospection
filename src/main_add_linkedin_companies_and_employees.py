@@ -1,321 +1,310 @@
-import sys
-import os
+"""CLI tool to follow LinkedIn company pages via Selenium.
+
+The script accepts a list of LinkedIn company URLs (via command line arguments,
+an input file, or standard input), opens each page in Chrome, and attempts to
+click the "Follow" button when it is not already active.  The resulting status
+for each URL is printed either as JSON or as a simple table so that the caller
+can capture the output when running the script over SSH.
+"""
+
+from __future__ import annotations
+
 import argparse
-# Add the project root to Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.db_prospection import ProspectionDB
+import json
+import sys
 import time
-import webbrowser
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, List, Optional
 
-# more than this number can lead to not loaded pages
-def add_company_with_validation(nb_open_companies_at_once: int = 8):
-    prospection_db = ProspectionDB('prospection_data.db')
-    all_companies = prospection_db.get_all_companies_not_added()
-    print('Total nb companies not added : ' + str(len(all_companies)))
+from selenium import webdriver
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    TimeoutException,
+    WebDriverException,
+)
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.remote.webelement import WebElement
 
-    counter = 0
-    companies_to_open = []
+from src.linkedin_company_follow import (
+    ButtonSnapshot,
+    detect_login_required,
+    evaluate_button_state,
+    merge_unique_urls,
+    normalise_company_url,
+    snapshot_button,
+)
 
-    def update_companies_status():
-        for c in companies_to_open:
-            prospection_db.updateAddedCompany(c)
 
-    while(True):
-        update_companies_status()
+BUTTON_SELECTORS = (
+    "button.follow",
+    "button[data-control-name='follow']",
+    "button[data-test-id='follow-button']",
+    "button[data-test-follow-button]",
+    "button[aria-label*='Follow']",
+)
 
-        if counter >= len(all_companies):
-            print('No more companies to open')
-            break
 
-        user_input = input("Press 'Y' to continue...")
-        if user_input in ['y', 'Y']:
-            # open new companies in browser
-            companies_to_open = all_companies[counter:counter + nb_open_companies_at_once]
-            for company in companies_to_open:
-                link =  company.link if company.link.startswith('http') else 'http://' + company.link
-                webbrowser.open(link)
-                print('Opening company : ' + company.name + " - " + company.link)
-                time.sleep(1)
-            counter += nb_open_companies_at_once
-        else:
-            break
+@dataclass
+class FollowResult:
+    url: str
+    status: str
+    reason: Optional[str] = None
 
-def add_employee_with_validation(nb_open_employees_at_once: int = 8):
-    prospection_db = ProspectionDB('prospection_data.db')
-    all_employees = prospection_db.get_all_employees_not_added()
-    print('Total nb employees not added : ' + str(len(all_employees)))
+    def as_dict(self) -> dict:
+        payload = {"url": self.url, "status": self.status}
+        if self.reason:
+            payload["reason"] = self.reason
+        return payload
 
-    counter = 0
-    employees_to_open = []
 
-    def update_employees_status():
-        for e in employees_to_open:
-            prospection_db.updateAddedEmployee(e)
+def build_driver(args: argparse.Namespace) -> webdriver.Chrome:
+    options = Options()
 
-    while(True):
-        update_employees_status()
+    if args.chrome_binary:
+        options.binary_location = args.chrome_binary
 
-        if counter >= len(all_employees):
-            print('No more employees to open')
-            break
+    if args.user_data_dir:
+        options.add_argument(f"--user-data-dir={args.user_data_dir}")
 
-        user_input = input("Press 'Y' to continue...")
-        if user_input in ['y', 'Y']:
-            # open new employees in browser
-            employees_to_open = all_employees[counter:counter + nb_open_employees_at_once]
-            for employee in employees_to_open:
-                link = employee.link if employee.link.startswith('http') else 'http://' + employee.link
-                webbrowser.open(link)
-                print('Opening employee : ' + str(employee.link) + " - Company: " + employee.company.name)
-                time.sleep(1)
-            counter += nb_open_employees_at_once
-        else:
-            break
+    if args.profile_directory:
+        options.add_argument(f"--profile-directory={args.profile_directory}")
 
-def auto_add_employees_and_companies_with_batch_delay(
-    total_employees: int, 
-    total_companies: int, 
-    nb_employees_per_batch: int = 20, 
-    nb_companies_per_batch: int = 30, 
-    avg_batch_delay: int = 60
-):
-    """
-    Enhanced automation with total limits and random delays
-    
-    Args:
-        total_employees: Total number of employees to connect (across all batches)
-        total_companies: Total number of companies to follow (across all batches)
-        nb_employees_per_batch: Number of employees per batch
-        nb_companies_per_batch: Number of companies per batch
-        avg_batch_delay: Average delay between batches in seconds
-    """
-    import random
-    
-    employees_processed = 0
-    companies_processed = 0
-    
-    print(f"🚀 Starting automation:")
-    print(f"   Target: {total_employees} employees, {total_companies} companies")
-    print(f"   Batch size: {nb_employees_per_batch} employees, {nb_companies_per_batch} companies")
-    print(f"   Batch delay: ~{avg_batch_delay} seconds")
-    
-    while employees_processed < total_employees or companies_processed < total_companies:
-        batch_start_time = time.time()
-        
-        # Process employees first (if any remaining)
-        if employees_processed < total_employees:
-            remaining_employees = total_employees - employees_processed
-            batch_employees = min(nb_employees_per_batch, remaining_employees)
-            
-            if batch_employees > 0:
-                print(f"\n👥 Processing {batch_employees} employees (Progress: {employees_processed}/{total_employees})")
-                processed = auto_add_employees_with_total_limit(batch_employees)
-                employees_processed += processed
-        
-        # Process companies (if any remaining)
-        if companies_processed < total_companies:
-            remaining_companies = total_companies - companies_processed
-            batch_companies = min(nb_companies_per_batch, remaining_companies)
-            
-            if batch_companies > 0:
-                print(f"\n🏢 Processing {batch_companies} companies (Progress: {companies_processed}/{total_companies})")
-                processed = auto_add_companies_with_total_limit(batch_companies)
-                companies_processed += processed
-        
-        # Check if we're done
-        if employees_processed >= total_employees and companies_processed >= total_companies:
-            print(f"\n✅ Automation complete!")
-            print(f"   Employees connected: {employees_processed}")
-            print(f"   Companies followed: {companies_processed}")
-            break
-        
-        # Batch delay only if there's more work to do
-        if employees_processed < total_employees or companies_processed < total_companies:
-            batch_delay_variation = avg_batch_delay + random.randint(-10, 10)
-            print(f"\n⏱️  Batch delay: {batch_delay_variation} seconds")
-            time.sleep(batch_delay_variation)
+    if args.headless:
+        options.add_argument("--headless=new")
 
-def auto_add_companies_with_batch_delay(nb_companies: int, avg_batch_delay: int, max_iter=6):
-    import random
-    can_add_companies = True
-    current_iter = 0
-    while(can_add_companies and current_iter < max_iter):
-        can_add_companies = auto_add_companies(nb_companies)
-        current_iter += 1
-        if can_add_companies:
-            batch_delay_variation = avg_batch_delay + random.randint(-10, 10)
-            print("Batch delay variation : " + str(batch_delay_variation))
-            time.sleep(batch_delay_variation)
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
 
-# uses plugin to open browser and update status in DB
-def auto_add_employees_with_total_limit(max_nb_employees_to_add: int) -> int:
-    """
-    Add employees with random delays between each action
-    Returns the actual number of employees processed
-    """
-    import random
-    prospection_db = ProspectionDB('prospection_data.db')
-    
-    employees_to_add = prospection_db.get_all_employees_not_added()[:max_nb_employees_to_add]
+    service = Service(executable_path=args.chromedriver) if args.chromedriver else Service()
 
-    print(f'Processing {len(employees_to_add)} employees...')
-    processed_count = 0
-    
-    for i, employee in enumerate(employees_to_add):
-        link = employee.link if employee.link.startswith('http') else 'http://' + employee.link
-        webbrowser.open(link)
-        print(f'  [{i+1}/{len(employees_to_add)}] Opening employee: {employee.link} - Company: {employee.company.name}')
-        prospection_db.updateAddedEmployee(employee)
-        processed_count += 1
-        
-        # Random delay between 1-3 seconds for each employee
-        if i < len(employees_to_add) - 1:  # Don't delay after the last one
-            delay = random.uniform(3.0, 6.0)
-            print(f'    ⏱️  Random delay: {delay:.1f}s')
-            time.sleep(delay)
-    
-    return processed_count
+    try:
+        return webdriver.Chrome(service=service, options=options)
+    except WebDriverException as exc:  # pragma: no cover - requires Chrome runtime
+        raise SystemExit(
+            "Unable to start Chrome. Ensure that chromedriver is installed and "
+            "compatible with the Chrome build present on the VM."
+        ) from exc
 
-# uses plugin to open browser and update status in DB (legacy function)
-def auto_add_employees(max_nb_employees_to_add: int) -> bool:
-    import random
-    prospection_db = ProspectionDB('prospection_data.db')
-    max_nb_employees_to_add = random.randint(int(max_nb_employees_to_add / 2), max_nb_employees_to_add)
-    print('Random number of employees to connect : ' + str(max_nb_employees_to_add))
 
-    employees_to_add = prospection_db.get_all_employees_not_added()[:max_nb_employees_to_add]
+def wait_for_page_ready(driver: webdriver.Chrome, timeout: int) -> None:
+    WebDriverWait(driver, timeout).until(
+        lambda d: d.execute_script("return document.readyState") == "complete"
+    )
 
-    print('Total nb employees not added : ' + str(len(employees_to_add)))
-    for employee in employees_to_add:
-        link = employee.link if employee.link.startswith('http') else 'http://' + employee.link
-        webbrowser.open(link)
-        print('Opening employee : ' + str(employee.link) + " - Company: " + employee.company.name)
-        prospection_db.updateAddedEmployee(employee)
-        time.sleep(1)
-    return len(employees_to_add) > 0
 
-# uses plugin to open browser and update status in DB
-def auto_add_companies_with_total_limit(max_nb_companies_to_add: int) -> int:
-    """
-    Add companies with random delays between each action
-    Returns the actual number of companies processed
-    """
-    import random
-    prospection_db = ProspectionDB('prospection_data.db')
-    
-    companies_to_add = prospection_db.get_all_companies_not_added()[:max_nb_companies_to_add]
+def find_follow_button(driver: webdriver.Chrome) -> Optional[tuple[WebElement, ButtonSnapshot]]:
+    for selector in BUTTON_SELECTORS:
+        try:
+            button = driver.find_element(By.CSS_SELECTOR, selector)
+            snapshot = snapshot_button(button)
+            if evaluate_button_state(snapshot) != "unknown":
+                return button, snapshot
+        except NoSuchElementException:
+            continue
+        except Exception:
+            continue
 
-    print(f'Processing {len(companies_to_add)} companies...')
-    processed_count = 0
-    
-    for i, company in enumerate(companies_to_add):
-        link = company.link if company.link.startswith('http') else 'http://' + company.link
-        webbrowser.open(link)
-        print(f'  [{i+1}/{len(companies_to_add)}] Opening company: {company.name} - {company.link}')
-        prospection_db.updateAddedCompany(company)
-        processed_count += 1
-        
-        # Random delay between 1-3 seconds for each company
-        if i < len(companies_to_add) - 1:  # Don't delay after the last one
-            delay = random.uniform(1.0, 3.0)
-            print(f'    ⏱️  Random delay: {delay:.1f}s')
-            time.sleep(delay)
-    
-    return processed_count
+    try:
+        buttons = driver.find_elements(By.TAG_NAME, "button")
+    except Exception:
+        return None
 
-# uses plugin to open browser and update status in DB (legacy function)
-def auto_add_companies(max_nb_companies_to_add: int) -> bool:
-    import random
-    prospection_db = ProspectionDB('prospection_data.db')
-    max_nb_companies_to_add = random.randint(int(max_nb_companies_to_add / 2), max_nb_companies_to_add)
-    print('Random number of companies to add : ' + str(max_nb_companies_to_add))
+    for button in buttons:
+        try:
+            snapshot = snapshot_button(button)
+        except Exception:
+            continue
+        if evaluate_button_state(snapshot) != "unknown":
+            return button, snapshot
 
-    companies_to_add = prospection_db.get_all_companies_not_added()[:max_nb_companies_to_add]
+    return None
 
-    print('Total nb companies not added : ' + str(len(companies_to_add)))
-    for company in companies_to_add:
-        link =  company.link if company.link.startswith('http') else 'http://' + company.link
-        webbrowser.open(link)
-        print('Opening company : ' + str(company.name) + " - " + company.link)
-        prospection_db.updateAddedCompany(company)
-        time.sleep(1)
-    return len(companies_to_add) > 0
 
-def parse_arguments():
-    """Parse command line arguments"""
+def click_follow_button(driver: webdriver.Chrome, timeout: int) -> str:
+    end_time = time.time() + timeout
+
+    while time.time() < end_time:
+        located = find_follow_button(driver)
+        if located is None:
+            time.sleep(0.5)
+            continue
+
+        button, snapshot = located
+        state = evaluate_button_state(snapshot)
+        if state == "already followed":
+            return "already followed"
+
+        if state != "follow":
+            time.sleep(0.5)
+            continue
+
+        try:
+            button.click()
+        except Exception:
+            time.sleep(0.5)
+            continue
+
+        # Wait for the button state to flip to "Following" after the click.
+        try:
+            def _followed(_driver: webdriver.Chrome) -> bool:
+                located = find_follow_button(_driver)
+                return bool(located and evaluate_button_state(located[1]) == "already followed")
+
+            WebDriverWait(driver, 10).until(_followed)
+            return "follow"
+        except TimeoutException:
+            pass
+
+    return "error"
+
+
+def process_url(driver: webdriver.Chrome, url: str, args: argparse.Namespace) -> FollowResult:
+    try:
+        normalised_url = normalise_company_url(url)
+    except ValueError as exc:
+        return FollowResult(url=url, status="error", reason=str(exc))
+
+    try:
+        driver.get(normalised_url)
+        wait_for_page_ready(driver, args.page_load_timeout)
+    except TimeoutException:
+        return FollowResult(url=normalised_url, status="error", reason="Page load timeout")
+    except WebDriverException as exc:
+        return FollowResult(url=normalised_url, status="error", reason=str(exc))
+
+    login_issue = detect_login_required(driver)
+    if login_issue:
+        return FollowResult(url=normalised_url, status="error", reason=login_issue)
+
+    located = find_follow_button(driver)
+    if located is None:
+        return FollowResult(url=normalised_url, status="error", reason="Follow button not found")
+
+    _, snapshot = located
+    state = evaluate_button_state(snapshot)
+    if state == "already followed":
+        return FollowResult(url=normalised_url, status="already followed")
+
+    if state != "follow":
+        return FollowResult(url=normalised_url, status="error", reason="Unexpected button state")
+
+    outcome = click_follow_button(driver, args.follow_timeout)
+    if outcome == "follow":
+        return FollowResult(url=normalised_url, status="follow")
+    if outcome == "already followed":
+        return FollowResult(url=normalised_url, status="already followed")
+    login_issue = detect_login_required(driver)
+    if login_issue:
+        return FollowResult(url=normalised_url, status="error", reason=login_issue)
+    return FollowResult(url=normalised_url, status="error", reason="Unable to confirm follow action")
+
+
+def parse_urls(args: argparse.Namespace) -> List[str]:
+    sources: list[Iterable[str]] = []
+
+    if args.input_file:
+        try:
+            with open(args.input_file, "r", encoding="utf-8") as handle:
+                sources.append(handle.readlines())
+        except OSError as exc:
+            raise SystemExit(f"Unable to read input file: {exc}") from exc
+
+    if args.urls:
+        sources.append(args.urls)
+
+    if not sys.stdin.isatty():
+        sources.append(line for line in sys.stdin)
+
+    urls = merge_unique_urls(sources)
+
+    if not urls:
+        raise SystemExit("No company URLs were provided. Supply them as arguments, via --input-file, or through stdin.")
+
+    return list(urls)
+
+
+def render_results(
+    results: List[FollowResult],
+    output_format: str,
+    output_path: Optional[str] = None,
+) -> str:
+    if output_format == "json":
+        payload = [result.as_dict() for result in results]
+        rendered = json.dumps(payload, indent=2)
+    else:
+        lines = []
+        header = f"{'URL':<80} | STATUS         | REASON"
+        lines.append(header)
+        lines.append("-" * len(header))
+        for result in results:
+            reason = result.reason or ""
+            lines.append(f"{result.url:<80} | {result.status:<14} | {reason}")
+        rendered = "\n".join(lines)
+
+    if output_path:
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        text_to_write = rendered if rendered.endswith("\n") else f"{rendered}\n"
+        destination.write_text(text_to_write, encoding="utf-8")
+
+    print(rendered)
+    return rendered
+
+
+def compute_exit_code(results: List[FollowResult]) -> int:
+    return 0 if all(result.status != "error" for result in results) else 1
+
+
+def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="LinkedIn Automation Suite - Automate employee connections and company follows",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python3 src/main_add_linkedin_companies_and_employees.py
-  python3 src/main_add_linkedin_companies_and_employees.py --total-employees 10 --total-companies 25
-  python3 src/main_add_linkedin_companies_and_employees.py -e 5 -c 15
-        """
+        description="Follow LinkedIn company pages using a logged-in Chrome session.",
     )
-    
-    parser.add_argument(
-        '-e', '--total-employees',
-        type=int,
-        default=0,
-        help='Total number of employees to connect with (default: 0)'
-    )
-    
-    parser.add_argument(
-        '-c', '--total-companies',
-        type=int,
-        default=50,
-        help='Total number of companies to follow (default: 50)'
-    )
-    
-    parser.add_argument(
-        '--employees-per-batch',
-        type=int,
-        default=5,
-        help='Number of employees per batch (default: 5, recommended: 3-8)'
-    )
-    
-    parser.add_argument(
-        '--companies-per-batch',
-        type=int,
-        default=20,
-        help='Number of companies per batch (default: 20, recommended: 5-15)'
-    )
-    
-    parser.add_argument(
-        '--batch-delay',
-        type=int,
-        default=60,
-        help='Average delay between batches in seconds (default: 60, recommended: 45-120)'
-    )
-    
-    return parser.parse_args()
 
-if __name__ == '__main__':
-    print("🚀 LinkedIn Automation Suite")
-    
-    # Parse command line arguments
-    args = parse_arguments()
-    
-    # Enhanced automation with total limits and random delays
-    auto_add_employees_and_companies_with_batch_delay(
-        total_employees=args.total_employees,
-        total_companies=args.total_companies,
-        nb_employees_per_batch=args.employees_per_batch,
-        nb_companies_per_batch=args.companies_per_batch,
-        avg_batch_delay=args.batch_delay
-    )
-    
-    # Alternative automation options (commented out):
-    
-    # Legacy company-only automation
-    #auto_add_companies_with_batch_delay(10, 60, 5)
-    
-    # Manual validation modes
-    #add_company_with_validation(8)
-    #add_employee_with_validation(8)
-    
-    # Individual function calls for testing
-    #auto_add_employees_with_total_limit(5)
-    #auto_add_companies_with_total_limit(10)
+    parser.add_argument("urls", nargs="*", help="LinkedIn company URLs to follow")
+    parser.add_argument("--input-file", help="Path to a file containing company URLs (one per line)")
+    parser.add_argument("--user-data-dir", help="Chrome user data directory with an authenticated LinkedIn session")
+    parser.add_argument("--profile-directory", help="Chrome profile directory to use (e.g. 'Default')")
+    parser.add_argument("--chrome-binary", help="Path to the Chrome/Chromium binary to use")
+    parser.add_argument("--headless", action="store_true", help="Run Chrome in headless mode (Chrome 109+)")
+    parser.add_argument("--chromedriver", help="Path to the chromedriver binary to use")
+    parser.add_argument("--page-load-timeout", type=int, default=30, help="Seconds to wait for a page to load")
+    parser.add_argument("--follow-timeout", type=int, default=20, help="Seconds to wait when attempting to follow a company")
+    parser.add_argument("--delay-between", type=float, default=1.5, help="Delay between URL navigations in seconds")
+    parser.add_argument("--output-format", choices=("table", "json"), default="table", help="Output results as a table or JSON array")
+    parser.add_argument("--output-path", help="Optional path to save the rendered results")
+
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    args = parse_arguments(argv)
+    urls = parse_urls(args)
+
+    driver = build_driver(args)
+
+    results: List[FollowResult] = []
+
+    try:
+        for index, url in enumerate(urls, start=1):
+            if index > 1 and args.delay_between > 0:
+                time.sleep(args.delay_between)
+
+            result = process_url(driver, url, args)
+            results.append(result)
+    finally:
+        driver.quit()
+
+    render_results(results, args.output_format, args.output_path)
+    return compute_exit_code(results)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

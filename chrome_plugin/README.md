@@ -1,13 +1,12 @@
-## Add me to chrome as extension
+## Add the extension to Chrome
 
-# this plugin is a chrome extension that allows you to automatically clic on "Follow" button on LinkedIn
-# It's very powerfull coupled with the auto_add method in the 
+This extension automatically clicks the English "Follow" button on LinkedIn company pages.
+It works best when combined with the automated company opener in the CLI utilities and is disabled on non-English interfaces.
 
-- in Chrome enter this url:
-chrome://extensions/
+Steps:
+- Open `chrome://extensions/` in Chrome.
+- Enable **Developer mode**.
+- Click **Load unpacked** and select the `chrome_plugin` folder from this repository.
+- Confirm the installation, then open the extension popup to ensure the toggle is **enabled**.
 
-- activate "Mode développeur" (developer mode)
-
-- Clic on "Charger l'extension non empaquetée" (load unpacked extension)
-- select the folder `chrome_plugin` of this repo
-- and validate
+When the toggle is off, the content script will leave LinkedIn untouched. On non-company pages or non-English profiles, the tab closes automatically without clicking anything.
