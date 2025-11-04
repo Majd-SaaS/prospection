@@ -1,10 +1,9 @@
-# 🚀 LinkedIn Automation Suite
+# 🚀 LinkedIn Company Follow Automation
 
-**Automate your LinkedIn prospection process with intelligent employee connections and company following.**
+**Automate your LinkedIn prospection process by automatically following company pages.**
 
-This Python project automates LinkedIn prospection by:
-- 👥 **Connecting with employees** from target companies
-- 🏢 **Following company pages** automatically  
+This Python project focuses on:
+- 🏢 **Following company pages** automatically
 - 📊 **Managing prospects** in a local SQLite database
 - 🤖 **Smart automation** with configurable delays and batch processing
 
@@ -138,7 +137,7 @@ python src/main_parse_files.py
 - ✅ Creates/updates `prospection_data.db` SQLite database
 - 📊 Processes 3 BuiltWith files + 9 Mantiks files
 - 🏢 Extracts company information and LinkedIn URLs
-- 👥 Extracts employee LinkedIn profiles (from Mantiks data)
+- 👥 Optionally stores employee LinkedIn profiles (if present in the CSV)
 - 📝 Provides detailed logging of processing progress
 - 🔄 Supports incremental updates (won't duplicate existing data)
 
@@ -163,33 +162,24 @@ Completed processing React-websites-in-France.csv
 ```bash
 python src/main_add_linkedin_companies_and_employees.py
 ```
-*Defaults: 0 employees, 50 companies*
+*Defaults: follow 50 companies in automated batches*
 
 #### Custom Parameters:
 ```bash
-# Connect with 20 employees and follow 30 companies
-python src/main_add_linkedin_companies_and_employees.py --total-employees 20 --total-companies 30
+# Follow 30 companies in batches of 10 with longer delays
+python src/main_add_linkedin_companies_and_employees.py --total-companies 30 --companies-per-batch 10 --batch-delay 90
 
-# Short form
-python src/main_add_linkedin_companies_and_employees.py -e 10 -c 25
-
-# Full customization
-python src/main_add_linkedin_companies_and_employees.py \
-    --total-employees 15 \
-    --total-companies 40 \
-    --employees-per-batch 5 \
-    --companies-per-batch 15 \
-    --batch-delay 90
+# Manual mode: confirm each batch before opening company pages
+python src/main_add_linkedin_companies_and_employees.py --manual --companies-per-batch 5
 ```
 
 #### Command Line Options:
 | Option | Short | Description | Default |
 |--------|--------|-------------|---------|
-| `--total-employees` | `-e` | Total employees to connect with | 0 |
 | `--total-companies` | `-c` | Total companies to follow | 50 |
-| `--employees-per-batch` | | Employees per batch | 5 |
 | `--companies-per-batch` | | Companies per batch | 20 |
 | `--batch-delay` | | Seconds between batches | 60 |
+| `--manual` | | Enable manual confirmation mode | `False` |
 
 #### Help:
 ```bash
@@ -204,16 +194,13 @@ python src/main_add_linkedin_companies_and_employees.py --help
 
 | Parameter | Description | Default | Recommended |
 |-----------|-------------|---------|-------------|
-| `total_employees` | Total employees to connect | 50 | 20-100 |
-| `total_companies` | Total companies to follow | 100 | 50-200 |
-| `nb_employees_per_batch` | Employees per batch | 5 | 3-8 |
-| `nb_companies_per_batch` | Companies per batch | 10 | 5-15 |
-| `avg_batch_delay` | Seconds between batches | 60 | 45-120 |
+| `total_companies` | Total companies to follow | 50 | 25-150 |
+| `companies_per_batch` | Companies per batch | 20 | 5-25 |
+| `batch_delay` | Seconds between batches | 60 | 45-120 |
 
 ### 🕐 **Timing Features**
-- **Random delays**: 1-3 seconds between each action
+- **Random delays**: 1-3 seconds between each company follow
 - **Batch delays**: Configurable pauses between batches
-- **Smart progression**: Employees processed first, then companies
 
 ---
 
@@ -221,18 +208,17 @@ python src/main_add_linkedin_companies_and_employees.py --help
 
 ### **Automated Workflow:**
 ```
-1. 👥 Connect with X employees (with "Se connecter" button)
-   ↓ (Random 1-3s delays between each)
-2. 🏢 Follow Y companies (with "Suivre" button)  
-   ↓ (Random 1-3s delays between each)
-3. ⏱️ Wait ~60 seconds (batch delay)
-4. 🔄 Repeat until totals reached
+1. 🏢 Open a batch of company pages
+   ↓ (Random 1-3s delays between each open)
+2. 🤖 Chrome extension clicks the "Follow" button
+   ↓ (Tab closes automatically after following)
+3. ⏱️ Wait for the configured batch delay
+4. 🔄 Repeat until the target number of companies is reached
 ```
 
 ### **Chrome Extension Actions:**
-- **Employee profiles**: Clicks "Se connecter" → Handles invitation modal → Clicks "Envoyer sans note"
-- **Company profiles**: Clicks "Suivre" button
-- **Auto-close**: Closes tabs after successful actions
+- **Company profiles**: Clicks the "Follow" button when available
+- **Auto-close**: Closes tabs after a follow attempt (success or exhaustion of retries)
 
 ---
 
@@ -249,11 +235,11 @@ Shows detailed statistics about your prospection progress.
 # Manual company following with validation
 add_company_with_validation(8)
 
-# Manual employee connections with validation  
-add_employee_with_validation(8)
+# Automated batches with explicit totals
+auto_follow_companies_with_batches(total_companies=25, companies_per_batch=10, avg_batch_delay=75)
 
-# Legacy automation (companies only)
-auto_add_companies_with_batch_delay(10, 60, 5)
+# Legacy randomised automation
+auto_add_companies(20)
 ```
 
 ---
@@ -288,7 +274,7 @@ prospection-main/
 ## ⚠️ Important Notes
 
 - **Use Chrome browser** for best compatibility with the extension
-- **French LinkedIn interface** currently supported (easily customizable)
+- **English LinkedIn interface** supported out of the box (adjust selectors in `chrome_plugin/content.js` for other languages)
 - **Start small**: Test with 10-20 prospects before scaling up
 - **Monitor LinkedIn limits**: Respect platform guidelines
 - **Backup your data**: Keep copies of your prospect databases

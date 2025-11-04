@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "LinkedIn Auto Follow (manuel)",
-  "version": "1.0",
-  "description": "Clique automatiquement sur le bouton Suivre sur LinkedIn quand activé.",
+  "name": "LinkedIn Auto Follow",
+  "version": "1.1",
+  "description": "Automatically clicks the Follow button on LinkedIn company pages when enabled.",
   "permissions": ["scripting", "tabs", "storage"],
   "action": {
     "default_popup": "popup.html",
