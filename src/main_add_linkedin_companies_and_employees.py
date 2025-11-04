@@ -14,6 +14,7 @@ import json
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, List, Optional
 
 from selenium import webdriver
@@ -23,6 +24,7 @@ from selenium.common.exceptions import (
     WebDriverException,
 )
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.remote.webelement import WebElement
@@ -79,8 +81,10 @@ def build_driver(args: argparse.Namespace) -> webdriver.Chrome:
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
 
+    service = Service(executable_path=args.chromedriver) if args.chromedriver else Service()
+
     try:
-        return webdriver.Chrome(options=options)
+        return webdriver.Chrome(service=service, options=options)
     except WebDriverException as exc:  # pragma: no cover - requires Chrome runtime
         raise SystemExit(
             "Unable to start Chrome. Ensure that chromedriver is installed and "
@@ -218,18 +222,36 @@ def parse_urls(args: argparse.Namespace) -> List[str]:
     return list(urls)
 
 
-def render_results(results: List[FollowResult], output_format: str) -> None:
+def render_results(
+    results: List[FollowResult],
+    output_format: str,
+    output_path: Optional[str] = None,
+) -> str:
     if output_format == "json":
         payload = [result.as_dict() for result in results]
-        print(json.dumps(payload, indent=2))
-        return
+        rendered = json.dumps(payload, indent=2)
+    else:
+        lines = []
+        header = f"{'URL':<80} | STATUS         | REASON"
+        lines.append(header)
+        lines.append("-" * len(header))
+        for result in results:
+            reason = result.reason or ""
+            lines.append(f"{result.url:<80} | {result.status:<14} | {reason}")
+        rendered = "\n".join(lines)
 
-    header = f"{'URL':<80} | STATUS | REASON"
-    print(header)
-    print("-" * len(header))
-    for result in results:
-        reason = result.reason or ""
-        print(f"{result.url:<80} | {result.status:<14} | {reason}")
+    if output_path:
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        text_to_write = rendered if rendered.endswith("\n") else f"{rendered}\n"
+        destination.write_text(text_to_write, encoding="utf-8")
+
+    print(rendered)
+    return rendered
+
+
+def compute_exit_code(results: List[FollowResult]) -> int:
+    return 0 if all(result.status != "error" for result in results) else 1
 
 
 def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -243,10 +265,12 @@ def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--profile-directory", help="Chrome profile directory to use (e.g. 'Default')")
     parser.add_argument("--chrome-binary", help="Path to the Chrome/Chromium binary to use")
     parser.add_argument("--headless", action="store_true", help="Run Chrome in headless mode (Chrome 109+)")
+    parser.add_argument("--chromedriver", help="Path to the chromedriver binary to use")
     parser.add_argument("--page-load-timeout", type=int, default=30, help="Seconds to wait for a page to load")
     parser.add_argument("--follow-timeout", type=int, default=20, help="Seconds to wait when attempting to follow a company")
     parser.add_argument("--delay-between", type=float, default=1.5, help="Delay between URL navigations in seconds")
     parser.add_argument("--output-format", choices=("table", "json"), default="table", help="Output results as a table or JSON array")
+    parser.add_argument("--output-path", help="Optional path to save the rendered results")
 
     return parser.parse_args(argv)
 
@@ -269,8 +293,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     finally:
         driver.quit()
 
-    render_results(results, args.output_format)
-    return 0
+    render_results(results, args.output_format, args.output_path)
+    return compute_exit_code(results)
 
 
 if __name__ == "__main__":

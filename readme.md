@@ -25,7 +25,10 @@ company follow operations.
 - **Flexible input:** provide URLs as command line arguments, via an input
   file, or piped through standard input.
 - **JSON or table output:** choose the format that best suits your automation
-  needs.
+  needs and optionally persist it to disk for auditing.
+- **Automation friendly exit codes:** the CLI returns a non-zero exit status
+  whenever at least one URL fails so that orchestration tooling can detect
+  problems easily.
 
 ---
 
@@ -98,6 +101,32 @@ python src/main_add_linkedin_companies_and_employees.py \
   --input-file company_urls.txt
 ```
 
+### Persisting results to disk
+
+Provide `--output-path` to write the rendered output (table or JSON) to a
+specific location. Parent directories are created automatically:
+
+```bash
+python src/main_add_linkedin_companies_and_employees.py \
+  --user-data-dir="/path/to/chrome/User Data" \
+  --profile-directory="Default" \
+  --output-format json \
+  --output-path /var/log/linkedin/results.json \
+  --input-file company_urls.txt
+```
+
+### Custom chromedriver location
+
+If `chromedriver` is not on the `PATH`, point the CLI at the exact binary:
+
+```bash
+python src/main_add_linkedin_companies_and_employees.py \
+  --user-data-dir="/path/to/chrome/User Data" \
+  --profile-directory="Default" \
+  --chromedriver /opt/chromedriver/chromedriver \
+  https://www.linkedin.com/company/example-inc/
+```
+
 ### Headless execution
 
 When running through SSH without a display server, enable headless mode:
@@ -161,10 +190,12 @@ The three possible status values are:
 | `--profile-directory` | Profile directory inside the user data dir (e.g. `Default`, `Profile 1`) | – |
 | `--chrome-binary` | Override the Chrome/Chromium binary location | autodetected |
 | `--headless` | Launch Chrome in headless mode | disabled |
+| `--chromedriver` | Absolute path to the `chromedriver` binary | autodetected |
 | `--page-load-timeout` | Seconds to wait for each page to finish loading | 30 |
 | `--follow-timeout` | Seconds to wait for the follow action to succeed | 20 |
 | `--delay-between` | Delay in seconds between URL navigations | 1.5 |
 | `--output-format` | `table` or `json` | `table` |
+| `--output-path` | File path where the rendered output should be stored | – |
 
 > **Authentication:** Provide `--user-data-dir` (and optionally
 > `--profile-directory`) so Selenium reuses an existing Chrome profile that is
@@ -179,7 +210,9 @@ The three possible status values are:
 - Bundle Chrome, `chromedriver`, and the Python dependencies into the image or
   manage them with infrastructure as code.
 - Use `--output-format json` for easier integration with orchestrators or
-  monitoring tools that capture container logs.
+  monitoring tools that capture container logs. Combine with `--output-path`
+  when you want the container to persist the structured results for later
+  inspection.
 
 Example service snippet:
 
