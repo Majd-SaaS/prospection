@@ -56,6 +56,67 @@ pip install -r requirements.txt
 
 ---
 
+## 🛠️ Step-by-Step VM Setup (SSH Friendly)
+
+Follow this checklist to prepare a fresh on-prem VM (with GUI capability and
+Chrome installed) so the automation can run entirely over SSH:
+
+1. **Install base packages and tooling** (Debian/Ubuntu example):
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y git python3 python3-venv unzip
+   ```
+2. **Install Google Chrome or Chromium** together with a matching
+   `chromedriver`. Place the driver on your `PATH`, e.g. `/usr/local/bin`, and
+   keep the versions aligned to avoid Selenium handshake failures.
+3. **Clone the repository and prepare a virtual environment**:
+   ```bash
+   cd /opt
+   sudo git clone https://github.com/<your-org>/prospection.git
+   sudo chown -R $USER:$USER prospection
+   cd prospection
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+4. **Provide an authenticated Chrome profile**. Sign in to LinkedIn using
+   Chrome (locally or on the VM), then copy the corresponding *user data
+   directory* and profile folder (for example `Default`, `Profile 1`) onto the
+   VM. The CLI will reuse it via `--user-data-dir` and `--profile-directory` so
+   no credentials are stored in scripts.
+5. **Run the automation CLI** with your preferred input source. Examples:
+   ```bash
+   # Single URL
+   python src/main_add_linkedin_companies_and_employees.py \
+     --user-data-dir="/path/to/chrome/User Data" \
+     --profile-directory="Default" \
+     https://www.linkedin.com/company/example-inc/
+
+   # Read URLs from a file while headless
+   python src/main_add_linkedin_companies_and_employees.py \
+     --user-data-dir="/path/to/chrome/User Data" \
+     --profile-directory="Default" \
+     --headless \
+     --input-file company_urls.txt \
+     --output-format json \
+     --output-path /var/log/linkedin/results.json
+   ```
+   Each run prints the status list (`follow`, `already followed`, or `error`
+   with a reason) and returns a non-zero exit code if any URL fails so that
+   orchestration tooling can react accordingly.
+6. **Troubleshoot authentication quickly**: if the output shows
+   `LinkedIn redirected to an authentication wall` or `LinkedIn is showing a
+   login form`, refresh or recopy the Chrome profile to ensure the LinkedIn
+   session is still valid.
+
+> 🐳 **Docker-first deployments:** replicate these steps in a Dockerfile by
+> installing Chrome and `chromedriver`, copying the repository, and mounting the
+> authenticated profile directory as a volume when running the container on your
+> on-prem server.
+
+---
+
 ## ▶️ Running the CLI
 
 The main entry point is `src/main_add_linkedin_companies_and_employees.py`. The
