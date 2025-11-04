@@ -137,9 +137,33 @@
     setTimeout(() => tryFollowCompany(), 500);
   };
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startAutomation, { once: true });
+  const runAutomation = () => {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', startAutomation, { once: true });
+    } else {
+      startAutomation();
+    }
+  };
+
+  const automationApi = {
+    LOG_PREFIX,
+    MAX_ATTEMPTS,
+    RETRY_DELAY_MS,
+    closeTab,
+    storageGet,
+    isExtensionEnabled,
+    isEnglishUi,
+    isCompanyPage,
+    isFollowButton,
+    findFollowButton,
+    tryFollowCompany,
+    startAutomation,
+    runAutomation,
+  };
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = automationApi;
   } else {
-    startAutomation();
+    runAutomation();
   }
 })();
