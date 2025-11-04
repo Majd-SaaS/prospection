@@ -1,11 +1,45 @@
 (() => {
-  console.log('LinkedIn company follow automation loaded.');
-
+  const LOG_PREFIX = '[LinkedIn Auto Follow]';
   const MAX_ATTEMPTS = 10;
   const RETRY_DELAY_MS = 1000;
 
   const closeTab = () => {
     chrome.runtime.sendMessage({ action: 'close_tab' });
+  };
+
+  const storageGet = (keys) => new Promise((resolve) => {
+    chrome.storage.local.get(keys, (result) => {
+      if (chrome.runtime.lastError) {
+        console.warn(`${LOG_PREFIX} Unable to read extension settings, defaulting to enabled.`, chrome.runtime.lastError);
+        const fallbackEnabled = typeof keys === 'object' && keys !== null && Object.prototype.hasOwnProperty.call(keys, 'enabled')
+          ? keys.enabled
+          : true;
+        resolve({ enabled: fallbackEnabled });
+        return;
+      }
+
+      resolve(result);
+    });
+  });
+
+  const isExtensionEnabled = async () => {
+    const result = await storageGet({ enabled: true });
+    return Boolean(result.enabled);
+  };
+
+  const isEnglishUi = () => {
+    const lang = (document.documentElement.getAttribute('lang') || '').toLowerCase();
+    return !lang || lang.startsWith('en');
+  };
+
+  const isCompanyPage = () => {
+    const currentUrl = window.location.href;
+    if (currentUrl.includes('/company/')) {
+      return true;
+    }
+
+    const canonicalLink = document.querySelector('link[rel="canonical"]');
+    return Boolean(canonicalLink && canonicalLink.href.includes('/company/'));
   };
 
   const isFollowButton = (btn) => {
@@ -15,7 +49,7 @@
 
     const ariaPressed = btn.getAttribute('aria-pressed');
     if (ariaPressed && ariaPressed.toLowerCase() === 'true') {
-      return false; // already following
+      return false;
     }
 
     const text = (btn.textContent || '').trim().toLowerCase();
@@ -25,11 +59,13 @@
       .map((span) => (span.textContent || '').trim().toLowerCase())
       .filter(Boolean);
 
-    const hasFollowText = text === 'follow' || spanTexts.includes('follow');
+    const followSynonyms = ['follow', 'follow company'];
+    const buttonTexts = [text, ...spanTexts];
+    const hasFollowText = buttonTexts.some((value) => followSynonyms.includes(value));
     const hasFollowLabel = ariaLabel.includes('follow') && !ariaLabel.includes('following');
     const hasFollowControl = controlName.includes('follow');
 
-    const alreadyFollowingText = text.includes('following') || spanTexts.some((t) => t.includes('following'));
+    const alreadyFollowingText = buttonTexts.some((value) => value.includes('following'));
     const alreadyFollowingLabel = ariaLabel.includes('following');
 
     return !alreadyFollowingText && !alreadyFollowingLabel && (hasFollowText || hasFollowLabel || hasFollowControl);
@@ -53,41 +89,57 @@
   };
 
   const tryFollowCompany = (attempt = 1) => {
-    const currentUrl = window.location.href;
-
-    if (currentUrl.includes('unavailable')) {
-      console.log('Unavailable LinkedIn page detected. Closing tab immediately.');
-      closeTab();
-      return;
-    }
-
-    if (!currentUrl.includes('/company/')) {
-      console.log('Non-company page detected. No action will be taken.');
-      closeTab();
-      return;
-    }
-
-    console.log(`Attempt ${attempt}: searching for a Follow button on the company page...`);
+    console.log(`${LOG_PREFIX} Attempt ${attempt}: searching for a Follow button on the company page...`);
 
     const followButton = findFollowButton();
 
     if (followButton) {
       followButton.click();
-      console.log('Follow button clicked successfully.');
+      console.log(`${LOG_PREFIX} Follow button clicked successfully.`);
       setTimeout(closeTab, 1000);
       return;
     }
 
     if (attempt >= MAX_ATTEMPTS) {
-      console.log('Unable to locate a Follow button after multiple attempts. Closing tab.');
+      console.log(`${LOG_PREFIX} Unable to locate a Follow button after multiple attempts. Closing tab.`);
       closeTab();
       return;
     }
 
-    console.log('Follow button not found yet. Retrying shortly...');
+    console.log(`${LOG_PREFIX} Follow button not found yet. Retrying shortly...`);
     setTimeout(() => tryFollowCompany(attempt + 1), RETRY_DELAY_MS);
   };
 
-  // Start the automation shortly after the page loads
-  setTimeout(() => tryFollowCompany(), 500);
+  const startAutomation = async () => {
+    if (!(await isExtensionEnabled())) {
+      console.log(`${LOG_PREFIX} Automation is disabled via the popup toggle.`);
+      return;
+    }
+
+    if (!isEnglishUi()) {
+      console.log(`${LOG_PREFIX} Non-English LinkedIn interface detected. Closing tab to prevent unintended actions.`);
+      closeTab();
+      return;
+    }
+
+    if (!isCompanyPage()) {
+      console.log(`${LOG_PREFIX} Non-company page detected. Closing tab without action.`);
+      closeTab();
+      return;
+    }
+
+    if (window.location.href.includes('unavailable')) {
+      console.log(`${LOG_PREFIX} Unavailable LinkedIn page detected. Closing tab.`);
+      closeTab();
+      return;
+    }
+
+    setTimeout(() => tryFollowCompany(), 500);
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startAutomation, { once: true });
+  } else {
+    startAutomation();
+  }
 })();

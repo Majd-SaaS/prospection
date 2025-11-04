@@ -154,9 +154,13 @@ Completed processing React-websites-in-France.csv
 1. Open Chrome and go to `chrome://extensions/`
 2. Enable "Developer mode" 
 3. Click "Load unpacked" and select the `chrome_plugin/` folder
-4. The extension will automatically handle LinkedIn interactions
+4. The extension will automatically handle LinkedIn interactions (English LinkedIn interface only)
 
 ### Step 4: Run Automation
+
+Set the database location via the `PROSPECTION_DB_PATH` environment variable if you want to store
+the SQLite file outside the repository (useful for Docker volumes and backups). You can also pass
+`--db-path` at runtime to override the location per command.
 
 #### Quick Start (with defaults):
 ```bash
@@ -180,6 +184,7 @@ python src/main_add_linkedin_companies_and_employees.py --manual --companies-per
 | `--companies-per-batch` | | Companies per batch | 20 |
 | `--batch-delay` | | Seconds between batches | 60 |
 | `--manual` | | Enable manual confirmation mode | `False` |
+| `--db-path` | | Path to the SQLite database | `PROSPECTION_DB_PATH` or `prospection_data.db` |
 
 #### Help:
 ```bash
@@ -197,6 +202,29 @@ python src/main_add_linkedin_companies_and_employees.py --help
 | `total_companies` | Total companies to follow | 50 | 25-150 |
 | `companies_per_batch` | Companies per batch | 20 | 5-25 |
 | `batch_delay` | Seconds between batches | 60 | 45-120 |
+
+### 🐳 Docker-Friendly Deployment
+
+For on-premises Docker hosting, mount a persistent volume for your SQLite database and CSV inputs,
+and rely on `PROSPECTION_DB_PATH` to point automation scripts at the mounted location.
+
+**Sample `docker-compose.yml` service:**
+
+```yaml
+services:
+  prospection:
+    build: .
+    environment:
+      PROSPECTION_DB_PATH: /data/prospection_data.db
+    volumes:
+      - ./prospection_data:/data
+      - ./input_files:/inputs
+    command: >-
+      python src/main_add_linkedin_companies_and_employees.py --total-companies 40 --companies-per-batch 10
+```
+
+Map your CSV imports into `/inputs`, run the parser inside the container, and the automation CLI will
+reuse the shared `/data` volume for stateful company tracking.
 
 ### 🕐 **Timing Features**
 - **Random delays**: 1-3 seconds between each company follow
@@ -232,14 +260,23 @@ Shows detailed statistics about your prospection progress.
 
 ### Manual Mode Options:
 ```python
+from src.db_prospection import ProspectionDB
+from src.main_add_linkedin_companies_and_employees import (
+    add_company_with_validation,
+    auto_follow_companies_with_batches,
+    auto_add_companies,
+)
+
+db = ProspectionDB('prospection_data.db')
+
 # Manual company following with validation
-add_company_with_validation(8)
+add_company_with_validation(db, 8)
 
 # Automated batches with explicit totals
-auto_follow_companies_with_batches(total_companies=25, companies_per_batch=10, avg_batch_delay=75)
+auto_follow_companies_with_batches(db, total_companies=25, companies_per_batch=10, avg_batch_delay=75)
 
 # Legacy randomised automation
-auto_add_companies(20)
+auto_add_companies(db, 20)
 ```
 
 ---
@@ -285,7 +322,7 @@ prospection-main/
 
 ### Modify Chrome Extension:
 Edit `chrome_plugin/content.js` to:
-- Support different languages
+- Support different languages (currently optimised for English "Follow" buttons)
 - Change button detection logic
 - Adjust timing parameters
 

@@ -4,50 +4,65 @@ import argparse
 import time
 import random
 import webbrowser
+from typing import Iterable
 
 # Add the project root to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.db_prospection import ProspectionDB
+from src.db_prospection import ProspectionDB, CompanyDB
 
 
-def add_company_with_validation(nb_open_companies_at_once: int = 8):
+DEFAULT_DB_PATH = os.getenv('PROSPECTION_DB_PATH', 'prospection_data.db')
+
+
+def _normalise_company_link(link: str) -> str:
+    """Ensure LinkedIn URLs include a protocol and trim whitespace."""
+
+    cleaned = (link or '').strip()
+    if cleaned.startswith(('http://', 'https://')):
+        return cleaned
+
+    return f'https://{cleaned.lstrip('/')}'
+
+
+def _open_company_pages(companies: Iterable[CompanyDB]) -> None:
+    """Open each company page in a new browser tab with a short delay."""
+
+    for index, company in enumerate(companies, start=1):
+        url = _normalise_company_link(company.link)
+        webbrowser.open_new_tab(url)
+        print(f'  [{index}] Opening company: {company.name} - {url}')
+        time.sleep(1)
+
+
+def add_company_with_validation(prospection_db: ProspectionDB, nb_open_companies_at_once: int = 8):
     """Manually confirm each batch of company pages before they are opened."""
-    prospection_db = ProspectionDB('prospection_data.db')
-    all_companies = prospection_db.get_all_companies_not_added()
-    print(f'Total companies waiting to be followed: {len(all_companies)}')
 
-    counter = 0
-    companies_to_open = []
-
-    def update_companies_status():
-        for company in companies_to_open:
-            prospection_db.updateAddedCompany(company)
+    print('Manual company follow workflow ready.')
 
     while True:
-        update_companies_status()
-
-        if counter >= len(all_companies):
+        pending_companies = prospection_db.get_all_companies_not_added()
+        if not pending_companies:
             print('No more companies available to open.')
             break
 
+        print(f'Companies waiting to be followed: {len(pending_companies)}')
         user_input = input("Press 'Y' to open the next batch of company pages (any other key to stop): ")
-        if user_input in ['y', 'Y']:
-            companies_to_open = all_companies[counter:counter + nb_open_companies_at_once]
-            for company in companies_to_open:
-                link = company.link if company.link.startswith('http') else 'http://' + company.link
-                webbrowser.open(link)
-                print(f'Opening company: {company.name} - {company.link}')
-                time.sleep(1)
-            counter += nb_open_companies_at_once
-        else:
+        if user_input not in ['y', 'Y']:
             print('Stopping manual follow workflow.')
             break
 
+        batch = pending_companies[:nb_open_companies_at_once]
+        _open_company_pages(batch)
+        for company in batch:
+            prospection_db.updateAddedCompany(company)
 
-def auto_add_companies_with_total_limit(max_nb_companies_to_add: int) -> int:
+
+def auto_add_companies_with_total_limit(
+    prospection_db: ProspectionDB,
+    max_nb_companies_to_add: int
+) -> int:
     """Open a limited number of company pages and mark them as followed in the database."""
-    prospection_db = ProspectionDB('prospection_data.db')
 
     companies_to_add = prospection_db.get_all_companies_not_added()[:max_nb_companies_to_add]
 
@@ -55,9 +70,9 @@ def auto_add_companies_with_total_limit(max_nb_companies_to_add: int) -> int:
     processed_count = 0
 
     for i, company in enumerate(companies_to_add):
-        link = company.link if company.link.startswith('http') else 'http://' + company.link
-        webbrowser.open(link)
-        print(f'  [{i + 1}/{len(companies_to_add)}] Opening company: {company.name} - {company.link}')
+        url = _normalise_company_link(company.link)
+        webbrowser.open_new_tab(url)
+        print(f'  [{i + 1}/{len(companies_to_add)}] Opening company: {company.name} - {url}')
         prospection_db.updateAddedCompany(company)
         processed_count += 1
 
@@ -69,25 +84,23 @@ def auto_add_companies_with_total_limit(max_nb_companies_to_add: int) -> int:
     return processed_count
 
 
-def auto_add_companies(max_nb_companies_to_add: int) -> bool:
+def auto_add_companies(prospection_db: ProspectionDB, max_nb_companies_to_add: int) -> bool:
     """Legacy helper that opens a random number of company pages."""
-    prospection_db = ProspectionDB('prospection_data.db')
+
     randomized_target = random.randint(int(max_nb_companies_to_add / 2), max_nb_companies_to_add)
     print(f'Random number of companies to add this round: {randomized_target}')
 
     companies_to_add = prospection_db.get_all_companies_not_added()[:randomized_target]
 
     print(f'Total companies not yet followed: {len(companies_to_add)}')
+    _open_company_pages(companies_to_add)
     for company in companies_to_add:
-        link = company.link if company.link.startswith('http') else 'http://' + company.link
-        webbrowser.open(link)
-        print(f'Opening company: {company.name} - {company.link}')
         prospection_db.updateAddedCompany(company)
-        time.sleep(1)
     return len(companies_to_add) > 0
 
 
 def auto_follow_companies_with_batches(
+    prospection_db: ProspectionDB,
     total_companies: int,
     companies_per_batch: int = 20,
     avg_batch_delay: int = 60
@@ -111,7 +124,10 @@ def auto_follow_companies_with_batches(
         batch_companies = min(companies_per_batch, remaining_companies)
 
         print(f"\nBatch {batch_number}: preparing to open {batch_companies} company pages")
-        processed = auto_add_companies_with_total_limit(batch_companies)
+        processed = auto_add_companies_with_total_limit(
+            prospection_db,
+            batch_companies
+        )
         companies_processed += processed
 
         if processed == 0:
@@ -168,16 +184,29 @@ def parse_arguments():
         help='Use manual confirmation mode instead of automated batches.'
     )
 
+    parser.add_argument(
+        '--db-path',
+        type=str,
+        default=None,
+        help='Path to the SQLite database (default: PROSPECTION_DB_PATH or prospection_data.db)'
+    )
+
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     args = parse_arguments()
 
+    db_path = args.db_path or DEFAULT_DB_PATH
+    prospection_db = ProspectionDB(db_path)
+
+    print(f'Using database at: {os.path.abspath(db_path)}')
+
     if args.manual:
-        add_company_with_validation(args.companies_per_batch)
+        add_company_with_validation(prospection_db, args.companies_per_batch)
     else:
         auto_follow_companies_with_batches(
+            prospection_db=prospection_db,
             total_companies=args.total_companies,
             companies_per_batch=args.companies_per_batch,
             avg_batch_delay=args.batch_delay
