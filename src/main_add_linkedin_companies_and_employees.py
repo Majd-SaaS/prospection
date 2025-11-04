@@ -1,213 +1,278 @@
-import sys
-import os
+"""CLI tool to follow LinkedIn company pages via Selenium.
+
+The script accepts a list of LinkedIn company URLs (via command line arguments,
+an input file, or standard input), opens each page in Chrome, and attempts to
+click the "Follow" button when it is not already active.  The resulting status
+for each URL is printed either as JSON or as a simple table so that the caller
+can capture the output when running the script over SSH.
+"""
+
+from __future__ import annotations
+
 import argparse
+import json
+import sys
 import time
-import random
-import webbrowser
-from typing import Iterable
+from dataclasses import dataclass
+from typing import Iterable, List, Optional
 
-# Add the project root to Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from selenium import webdriver
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    TimeoutException,
+    WebDriverException,
+)
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.remote.webelement import WebElement
 
-from src.db_prospection import ProspectionDB, CompanyDB
-
-
-DEFAULT_DB_PATH = os.getenv('PROSPECTION_DB_PATH', 'prospection_data.db')
-
-
-def _normalise_company_link(link: str) -> str:
-    """Ensure LinkedIn URLs include a protocol and trim whitespace."""
-
-    cleaned = (link or '').strip()
-    if cleaned.startswith(('http://', 'https://')):
-        return cleaned
-
-    return f'https://{cleaned.lstrip('/')}'
-
-
-def _open_company_pages(companies: Iterable[CompanyDB]) -> None:
-    """Open each company page in a new browser tab with a short delay."""
-
-    for index, company in enumerate(companies, start=1):
-        url = _normalise_company_link(company.link)
-        webbrowser.open_new_tab(url)
-        print(f'  [{index}] Opening company: {company.name} - {url}')
-        time.sleep(1)
+from src.linkedin_company_follow import (
+    ButtonSnapshot,
+    evaluate_button_state,
+    merge_unique_urls,
+    normalise_company_url,
+    snapshot_button,
+)
 
 
-def add_company_with_validation(prospection_db: ProspectionDB, nb_open_companies_at_once: int = 8):
-    """Manually confirm each batch of company pages before they are opened."""
-
-    print('Manual company follow workflow ready.')
-
-    while True:
-        pending_companies = prospection_db.get_all_companies_not_added()
-        if not pending_companies:
-            print('No more companies available to open.')
-            break
-
-        print(f'Companies waiting to be followed: {len(pending_companies)}')
-        user_input = input("Press 'Y' to open the next batch of company pages (any other key to stop): ")
-        if user_input not in ['y', 'Y']:
-            print('Stopping manual follow workflow.')
-            break
-
-        batch = pending_companies[:nb_open_companies_at_once]
-        _open_company_pages(batch)
-        for company in batch:
-            prospection_db.updateAddedCompany(company)
+BUTTON_SELECTORS = (
+    "button.follow",
+    "button[data-control-name='follow']",
+    "button[data-test-id='follow-button']",
+    "button[data-test-follow-button]",
+    "button[aria-label*='Follow']",
+)
 
 
-def auto_add_companies_with_total_limit(
-    prospection_db: ProspectionDB,
-    max_nb_companies_to_add: int
-) -> int:
-    """Open a limited number of company pages and mark them as followed in the database."""
+@dataclass
+class FollowResult:
+    url: str
+    status: str
+    reason: Optional[str] = None
 
-    companies_to_add = prospection_db.get_all_companies_not_added()[:max_nb_companies_to_add]
-
-    print(f'Processing {len(companies_to_add)} companies...')
-    processed_count = 0
-
-    for i, company in enumerate(companies_to_add):
-        url = _normalise_company_link(company.link)
-        webbrowser.open_new_tab(url)
-        print(f'  [{i + 1}/{len(companies_to_add)}] Opening company: {company.name} - {url}')
-        prospection_db.updateAddedCompany(company)
-        processed_count += 1
-
-        if i < len(companies_to_add) - 1:
-            delay = random.uniform(1.0, 3.0)
-            print(f'    ⏱️  Random delay before next company: {delay:.1f}s')
-            time.sleep(delay)
-
-    return processed_count
+    def as_dict(self) -> dict:
+        payload = {"url": self.url, "status": self.status}
+        if self.reason:
+            payload["reason"] = self.reason
+        return payload
 
 
-def auto_add_companies(prospection_db: ProspectionDB, max_nb_companies_to_add: int) -> bool:
-    """Legacy helper that opens a random number of company pages."""
+def build_driver(args: argparse.Namespace) -> webdriver.Chrome:
+    options = Options()
 
-    randomized_target = random.randint(int(max_nb_companies_to_add / 2), max_nb_companies_to_add)
-    print(f'Random number of companies to add this round: {randomized_target}')
+    if args.chrome_binary:
+        options.binary_location = args.chrome_binary
 
-    companies_to_add = prospection_db.get_all_companies_not_added()[:randomized_target]
+    if args.user_data_dir:
+        options.add_argument(f"--user-data-dir={args.user_data_dir}")
 
-    print(f'Total companies not yet followed: {len(companies_to_add)}')
-    _open_company_pages(companies_to_add)
-    for company in companies_to_add:
-        prospection_db.updateAddedCompany(company)
-    return len(companies_to_add) > 0
+    if args.profile_directory:
+        options.add_argument(f"--profile-directory={args.profile_directory}")
+
+    if args.headless:
+        options.add_argument("--headless=new")
+
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+
+    try:
+        return webdriver.Chrome(options=options)
+    except WebDriverException as exc:  # pragma: no cover - requires Chrome runtime
+        raise SystemExit(
+            "Unable to start Chrome. Ensure that chromedriver is installed and "
+            "compatible with the Chrome build present on the VM."
+        ) from exc
 
 
-def auto_follow_companies_with_batches(
-    prospection_db: ProspectionDB,
-    total_companies: int,
-    companies_per_batch: int = 20,
-    avg_batch_delay: int = 60
-):
-    """Automate opening company pages in batches with randomized delays between batches."""
+def wait_for_page_ready(driver: webdriver.Chrome, timeout: int) -> None:
+    WebDriverWait(driver, timeout).until(
+        lambda d: d.execute_script("return document.readyState") == "complete"
+    )
 
-    if total_companies <= 0:
-        print('No companies requested. Exiting automation.')
+
+def find_follow_button(driver: webdriver.Chrome) -> Optional[tuple[WebElement, ButtonSnapshot]]:
+    for selector in BUTTON_SELECTORS:
+        try:
+            button = driver.find_element(By.CSS_SELECTOR, selector)
+            snapshot = snapshot_button(button)
+            if evaluate_button_state(snapshot) != "unknown":
+                return button, snapshot
+        except NoSuchElementException:
+            continue
+        except Exception:
+            continue
+
+    try:
+        buttons = driver.find_elements(By.TAG_NAME, "button")
+    except Exception:
+        return None
+
+    for button in buttons:
+        try:
+            snapshot = snapshot_button(button)
+        except Exception:
+            continue
+        if evaluate_button_state(snapshot) != "unknown":
+            return button, snapshot
+
+    return None
+
+
+def click_follow_button(driver: webdriver.Chrome, timeout: int) -> str:
+    end_time = time.time() + timeout
+
+    while time.time() < end_time:
+        located = find_follow_button(driver)
+        if located is None:
+            time.sleep(0.5)
+            continue
+
+        button, snapshot = located
+        state = evaluate_button_state(snapshot)
+        if state == "already followed":
+            return "already followed"
+
+        if state != "follow":
+            time.sleep(0.5)
+            continue
+
+        try:
+            button.click()
+        except Exception:
+            time.sleep(0.5)
+            continue
+
+        # Wait for the button state to flip to "Following" after the click.
+        try:
+            def _followed(_driver: webdriver.Chrome) -> bool:
+                located = find_follow_button(_driver)
+                return bool(located and evaluate_button_state(located[1]) == "already followed")
+
+            WebDriverWait(driver, 10).until(_followed)
+            return "follow"
+        except TimeoutException:
+            pass
+
+    return "error"
+
+
+def process_url(driver: webdriver.Chrome, url: str, args: argparse.Namespace) -> FollowResult:
+    try:
+        normalised_url = normalise_company_url(url)
+    except ValueError as exc:
+        return FollowResult(url=url, status="error", reason=str(exc))
+
+    try:
+        driver.get(normalised_url)
+        wait_for_page_ready(driver, args.page_load_timeout)
+    except TimeoutException:
+        return FollowResult(url=normalised_url, status="error", reason="Page load timeout")
+    except WebDriverException as exc:
+        return FollowResult(url=normalised_url, status="error", reason=str(exc))
+
+    located = find_follow_button(driver)
+    if located is None:
+        return FollowResult(url=normalised_url, status="error", reason="Follow button not found")
+
+    _, snapshot = located
+    state = evaluate_button_state(snapshot)
+    if state == "already followed":
+        return FollowResult(url=normalised_url, status="already followed")
+
+    if state != "follow":
+        return FollowResult(url=normalised_url, status="error", reason="Unexpected button state")
+
+    outcome = click_follow_button(driver, args.follow_timeout)
+    if outcome == "follow":
+        return FollowResult(url=normalised_url, status="follow")
+    if outcome == "already followed":
+        return FollowResult(url=normalised_url, status="already followed")
+    return FollowResult(url=normalised_url, status="error", reason="Unable to confirm follow action")
+
+
+def parse_urls(args: argparse.Namespace) -> List[str]:
+    sources: list[Iterable[str]] = []
+
+    if args.input_file:
+        try:
+            with open(args.input_file, "r", encoding="utf-8") as handle:
+                sources.append(handle.readlines())
+        except OSError as exc:
+            raise SystemExit(f"Unable to read input file: {exc}") from exc
+
+    if args.urls:
+        sources.append(args.urls)
+
+    if not sys.stdin.isatty():
+        sources.append(line for line in sys.stdin)
+
+    urls = merge_unique_urls(sources)
+
+    if not urls:
+        raise SystemExit("No company URLs were provided. Supply them as arguments, via --input-file, or through stdin.")
+
+    return list(urls)
+
+
+def render_results(results: List[FollowResult], output_format: str) -> None:
+    if output_format == "json":
+        payload = [result.as_dict() for result in results]
+        print(json.dumps(payload, indent=2))
         return
 
-    print('🚀 Starting LinkedIn company follow automation')
-    print(f'  Target companies: {total_companies}')
-    print(f'  Companies per batch: {companies_per_batch}')
-    print(f'  Average delay between batches: {avg_batch_delay} seconds')
-
-    companies_processed = 0
-    batch_number = 1
-
-    while companies_processed < total_companies:
-        remaining_companies = total_companies - companies_processed
-        batch_companies = min(companies_per_batch, remaining_companies)
-
-        print(f"\nBatch {batch_number}: preparing to open {batch_companies} company pages")
-        processed = auto_add_companies_with_total_limit(
-            prospection_db,
-            batch_companies
-        )
-        companies_processed += processed
-
-        if processed == 0:
-            print('No more companies found in the database. Ending automation.')
-            break
-
-        if companies_processed >= total_companies:
-            print('\n✅ Automation complete!')
-            print(f'   Companies followed: {companies_processed}')
-            break
-
-        batch_delay_variation = max(0, avg_batch_delay + random.randint(-10, 10))
-        print(f'Waiting approximately {batch_delay_variation} seconds before the next batch...')
-        time.sleep(batch_delay_variation)
-        batch_number += 1
+    header = f"{'URL':<80} | STATUS | REASON"
+    print(header)
+    print("-" * len(header))
+    for result in results:
+        reason = result.reason or ""
+        print(f"{result.url:<80} | {result.status:<14} | {reason}")
 
 
-
-def parse_arguments():
-    """Parse command line arguments."""
+def parse_arguments(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="LinkedIn Company Follow Automation",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""Examples:
-  python3 src/main_add_linkedin_companies_and_employees.py
-  python3 src/main_add_linkedin_companies_and_employees.py --total-companies 30 --companies-per-batch 10
-        """
+        description="Follow LinkedIn company pages using a logged-in Chrome session.",
     )
 
-    parser.add_argument(
-        '-c', '--total-companies',
-        type=int,
-        default=50,
-        help='Total number of companies to follow (default: 50)'
-    )
+    parser.add_argument("urls", nargs="*", help="LinkedIn company URLs to follow")
+    parser.add_argument("--input-file", help="Path to a file containing company URLs (one per line)")
+    parser.add_argument("--user-data-dir", help="Chrome user data directory with an authenticated LinkedIn session")
+    parser.add_argument("--profile-directory", help="Chrome profile directory to use (e.g. 'Default')")
+    parser.add_argument("--chrome-binary", help="Path to the Chrome/Chromium binary to use")
+    parser.add_argument("--headless", action="store_true", help="Run Chrome in headless mode (Chrome 109+)")
+    parser.add_argument("--page-load-timeout", type=int, default=30, help="Seconds to wait for a page to load")
+    parser.add_argument("--follow-timeout", type=int, default=20, help="Seconds to wait when attempting to follow a company")
+    parser.add_argument("--delay-between", type=float, default=1.5, help="Delay between URL navigations in seconds")
+    parser.add_argument("--output-format", choices=("table", "json"), default="table", help="Output results as a table or JSON array")
 
-    parser.add_argument(
-        '--companies-per-batch',
-        type=int,
-        default=20,
-        help='Number of companies to open per batch (default: 20, recommended: 5-15)'
-    )
-
-    parser.add_argument(
-        '--batch-delay',
-        type=int,
-        default=60,
-        help='Average delay between batches in seconds (default: 60, recommended: 45-120)'
-    )
-
-    parser.add_argument(
-        '--manual',
-        action='store_true',
-        help='Use manual confirmation mode instead of automated batches.'
-    )
-
-    parser.add_argument(
-        '--db-path',
-        type=str,
-        default=None,
-        help='Path to the SQLite database (default: PROSPECTION_DB_PATH or prospection_data.db)'
-    )
-
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-if __name__ == '__main__':
-    args = parse_arguments()
+def main(argv: Optional[list[str]] = None) -> int:
+    args = parse_arguments(argv)
+    urls = parse_urls(args)
 
-    db_path = args.db_path or DEFAULT_DB_PATH
-    prospection_db = ProspectionDB(db_path)
+    driver = build_driver(args)
 
-    print(f'Using database at: {os.path.abspath(db_path)}')
+    results: List[FollowResult] = []
 
-    if args.manual:
-        add_company_with_validation(prospection_db, args.companies_per_batch)
-    else:
-        auto_follow_companies_with_batches(
-            prospection_db=prospection_db,
-            total_companies=args.total_companies,
-            companies_per_batch=args.companies_per_batch,
-            avg_batch_delay=args.batch_delay
-        )
+    try:
+        for index, url in enumerate(urls, start=1):
+            if index > 1 and args.delay_between > 0:
+                time.sleep(args.delay_between)
+
+            result = process_url(driver, url, args)
+            results.append(result)
+    finally:
+        driver.quit()
+
+    render_results(results, args.output_format)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
