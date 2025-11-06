@@ -1,57 +1,17 @@
 import io
 import json
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import MagicMock
 
-
-# Provide light-weight Selenium stand-ins so this test module can import the CLI
-# helpers without requiring the real Selenium dependency. The production code
-# still depends on Selenium being installed at runtime.
-mock_selenium = MagicMock()
-sys.modules.setdefault("selenium", mock_selenium)
-
-webdriver_mock = MagicMock()
-sys.modules.setdefault("selenium.webdriver", webdriver_mock)
-
-exceptions_mock = MagicMock()
-exceptions_mock.NoSuchElementException = Exception
-exceptions_mock.TimeoutException = Exception
-exceptions_mock.WebDriverException = Exception
-sys.modules.setdefault("selenium.common", MagicMock())
-sys.modules.setdefault("selenium.common.exceptions", exceptions_mock)
-
-chrome_options_mock = MagicMock()
-chrome_options_mock.Options = MagicMock
-sys.modules.setdefault("selenium.webdriver.chrome", MagicMock())
-sys.modules.setdefault("selenium.webdriver.chrome.options", chrome_options_mock)
-
-chrome_service_mock = MagicMock()
-chrome_service_mock.Service = MagicMock
-sys.modules.setdefault("selenium.webdriver.chrome.service", chrome_service_mock)
-
-by_mock = MagicMock()
-by_mock.By = MagicMock()
-sys.modules.setdefault("selenium.webdriver.common", MagicMock())
-sys.modules.setdefault("selenium.webdriver.common.by", by_mock)
-
-support_ui_mock = MagicMock()
-support_ui_mock.WebDriverWait = MagicMock
-sys.modules.setdefault("selenium.webdriver.support", MagicMock())
-sys.modules.setdefault("selenium.webdriver.support.ui", support_ui_mock)
-
-remote_webelement_mock = MagicMock()
-remote_webelement_mock.WebElement = MagicMock
-sys.modules.setdefault("selenium.webdriver.remote", MagicMock())
-sys.modules.setdefault("selenium.webdriver.remote.webelement", remote_webelement_mock)
-
-from src.main_add_linkedin_companies_and_employees import (  # noqa: E402
+from src.main_add_linkedin_companies_and_employees import (
     FollowResult,
+    append_incremental_result,
     compute_exit_code,
+    read_queue_file,
     render_results,
+    write_queue_file,
 )
 
 
@@ -98,6 +58,40 @@ class ComputeExitCodeTests(unittest.TestCase):
             FollowResult(url="https://example.com/b", status="error", reason="timeout"),
         ]
         self.assertEqual(compute_exit_code(results), 1)
+
+
+class QueueFileHelpersTests(unittest.TestCase):
+    def test_read_queue_file_rejects_missing(self):
+        with self.assertRaises(SystemExit):
+            read_queue_file("/tmp/nonexistent-file-for-tests")
+
+    def test_read_and_write_queue_file_cycle(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            queue_path = Path(tmpdir) / "queue.txt"
+            queue_path.write_text("https://a\n\nhttps://b\n", encoding="utf-8")
+
+            urls = read_queue_file(str(queue_path))
+            self.assertEqual(urls, ["https://a", "https://b"])
+
+            write_queue_file(str(queue_path), ["https://b"])
+            self.assertEqual(queue_path.read_text(encoding="utf-8"), "https://b\n")
+
+    def test_append_incremental_result_adds_header_once(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            destination = Path(tmpdir) / "results.csv"
+
+            append_incremental_result(
+                str(destination),
+                FollowResult(url="https://example.com/a", status="follow"),
+            )
+            append_incremental_result(
+                str(destination),
+                FollowResult(url="https://example.com/b", status="error", reason="timeout"),
+            )
+
+            contents = destination.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(contents), 3)
+            self.assertEqual(contents[0], "timestamp,url,status,reason")
 
 
 if __name__ == "__main__":  # pragma: no cover
