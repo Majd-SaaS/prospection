@@ -4,3 +4,8 @@
 .DS_Store
 prospection_data.db
 src/__pycache__/*
+# Python env & cache
+.venv/
+__pycache__/
+*/__pycache__/
+*.pyc
