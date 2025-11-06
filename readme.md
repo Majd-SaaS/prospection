@@ -1,342 +1,116 @@
 # 🚀 LinkedIn Company Follow Automation
 
-This project provides a headless-friendly way to follow LinkedIn company pages
-from a remote (SSH) session.  Instead of opening tabs locally and relying on
-the Chrome extension, the new CLI script launches Chrome via Selenium, checks
-whether each company page is already followed, and clicks the **Follow** button
-when necessary.  The script reports the outcome for every URL so it can be
-integrated into larger automation pipelines or executed manually on a server.
+This repo now ships a queue-based automation flow: a Python CLI reads LinkedIn
+company URLs from a file, opens them one by one in Chrome, and the bundled
+extension clicks **Follow** (or leaves the page alone if you already follow).
+Each tab stays open long enough for LinkedIn to register the action, the result
+is logged immediately, and the URL disappears from the queue so you can resume
+later.
 
-The rest of the repository (CSV parsers, SQLite database utilities, and the
-browser extension) is still available for teams that prefer the original
-workflow, but the CLI described below is now the primary entry-point for
-company follow operations.
+Legacy CSV/SQLite helpers are still available for teams managing prospects with
+the original database, but the queue + extension workflow described here is the
+recommended entry point for following company pages.
 
 ---
 
 ## ✅ Key Features
 
-- **SSH friendly:** run the automation on a remote VM without an interactive
-  browser session.
-- **Deterministic output:** returns `follow`, `already followed`, or `error`
-  for each company URL, making it easy to chain with other scripts.
-- **Chrome profile reuse:** point Selenium at an existing Chrome user profile
-  that is already authenticated with LinkedIn (no password prompts in CI).
-- **Flexible input:** provide URLs as command line arguments, via an input
-  file, or piped through standard input.
-- **JSON or table output:** choose the format that best suits your automation
-  needs and optionally persist it to disk for auditing.
-- **Automation friendly exit codes:** the CLI returns a non-zero exit status
-  whenever at least one URL fails so that orchestration tooling can detect
-  problems easily.
-- **Auth wall detection:** gracefully reports when LinkedIn redirects to a
-  login or checkpoint page so remote jobs can surface misconfigured Chrome
-  profiles immediately.
+- **Queue-driven:** point the CLI at a queue file; it launches each URL, waits
+  for the extension status (`follow`, `already followed`, or `error`), logs the
+  outcome, and rewrites the queue.
+- **Extension callbacks:** the Chrome extension reports back via localhost so
+  you always know why a URL failed (missing button, login wall, etc.).
+- **Safety pacing:** defaults to **90 s** between tabs and keeps each page open
+  for **60 s** before auto-closing.
+- **Daily quota:** configurable limit (default 100 URLs/day) stored in
+  `~/.prospection_daily_quota.json`; remaining URLs stay in the queue.
+- **Resumable:** stop the CLI anytime—unprocessed URLs remain in the input
+  file, and results are already written to CSV.
 
 ---
 
 ## 🧰 Prerequisites
 
 - Python 3.10+
-- Google Chrome or Chromium installed on the VM
-- A matching `chromedriver` available on the PATH (or managed by your
-  orchestration tooling)
-- A Chrome user profile that is already logged into LinkedIn (the VM can reuse
-  an existing desktop session by referencing its user data directory)
+- Google Chrome on the machine running the automation
+- The **LinkedIn Auto Follow** extension from `chrome_plugin/` loaded in
+  Developer Mode
+- A Chrome profile that is already signed in to LinkedIn
 
-Install Python dependencies:
+### Environment setup
 
 ```bash
+cd /opt/prospection
+python3 -m venv .venv
+. .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-> **Tip:** When containerising the project for on-prem hosting, bake Chrome and
-> `chromedriver` into the image or mount them from the host to guarantee
-> version alignment.
+### Install / reload the extension
+
+1. Open `chrome://extensions`, enable **Developer mode**.
+2. Click **Load unpacked** → select the `chrome_plugin/` folder.
+3. Ensure the popup toggle is **enabled** and the “Close tabs when automation
+   is skipped” option matches your workflow.
 
 ---
 
-## 🛠️ Step-by-Step VM Setup (SSH Friendly)
+## 🛠️ Queue Automation Workflow
 
-Follow this checklist to prepare a fresh on-prem VM (with GUI capability and
-Chrome installed) so the automation can run entirely over SSH:
-
-1. **Install base packages and tooling** (Debian/Ubuntu example):
-   ```bash
-   sudo apt-get update
-   sudo apt-get install -y git python3 python3-venv unzip
+1. **Prepare queue + log files**
    ```
-2. **Install Google Chrome or Chromium** together with a matching
-   `chromedriver`. Place the driver on your `PATH`, e.g. `/usr/local/bin`, and
-   keep the versions aligned to avoid Selenium handshake failures.
-3. **Clone the repository and prepare a virtual environment**:
-   ```bash
-   cd /opt
-   sudo git clone https://github.com/<your-org>/prospection.git
-   sudo chown -R $USER:$USER prospection
-   cd prospection
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install --upgrade pip
-   pip install -r requirements.txt
+   /home/<user>/Desktop/FollowCompany/Input.txt    # one company URL per line
+   /home/<user>/Desktop/FollowCompany/results.csv  # created automatically
    ```
-4. **Provide an authenticated Chrome profile**. Sign in to LinkedIn using
-   Chrome (locally or on the VM), then copy the corresponding *user data
-   directory* and profile folder (for example `Default`, `Profile 1`) onto the
-   VM. The CLI will reuse it via `--user-data-dir` and `--profile-directory` so
-   no credentials are stored in scripts.
-5. **Run the automation CLI** with your preferred input source. Examples:
+2. **Keep Chrome signed in** (normal desktop session is fine; no Selenium).
+3. **Run the CLI** (defaults: 100 URLs/day, 90 s between tabs, 60 s dwell):
    ```bash
-   # Single URL
-   python src/main_add_linkedin_companies_and_employees.py \
-     --user-data-dir="/path/to/chrome/User Data" \
-     --profile-directory="Default" \
-     https://www.linkedin.com/company/example-inc/
-
-   # Read URLs from a file while headless
-   python src/main_add_linkedin_companies_and_employees.py \
-     --user-data-dir="/path/to/chrome/User Data" \
-     --profile-directory="Default" \
-     --headless \
-     --input-file company_urls.txt \
-     --output-format json \
-     --output-path /var/log/linkedin/results.json
+   /opt/prospection/.venv/bin/python -m src.main_add_linkedin_companies_and_employees \
+     --queue-file "/home/<user>/Desktop/FollowCompany/Input.txt" \
+     --queue-output "/home/<user>/Desktop/FollowCompany/results.csv"
    ```
-   Each run prints the status list (`follow`, `already followed`, or `error`
-   with a reason) and returns a non-zero exit code if any URL fails so that
-   orchestration tooling can react accordingly.
-6. **Troubleshoot authentication quickly**: if the output shows
-   `LinkedIn redirected to an authentication wall` or `LinkedIn is showing a
-   login form`, refresh or recopy the Chrome profile to ensure the LinkedIn
-   session is still valid.
-
-> 🐳 **Docker-first deployments:** replicate these steps in a Dockerfile by
-> installing Chrome and `chromedriver`, copying the repository, and mounting the
-> authenticated profile directory as a volume when running the container on your
-> on-prem server.
+   Optional flags:
+   - `--daily-limit 50` – change the daily quota (set to `0` to disable).
+   - `--delay-between 120` – adjust seconds between tab launches.
+   - `--page-duration 75` – change how long each tab stays open before closing.
+   - `--callback-timeout 120` – extend how long the CLI waits for the extension
+     to report a result before marking it as `error`.
+4. **Watch the workflow**
+   - Tabs open sequentially; the extension follows when needed.
+   - `results.csv` gets a timestamped row after each tab.
+   - `Input.txt` rewrites itself so only remaining URLs stay in the queue.
 
 ---
 
-## ▶️ Running the CLI
+## 📊 Monitoring & Tips
 
-The main entry point is `src/main_add_linkedin_companies_and_employees.py`. The
-script is fully self-contained and can be run directly after installing the
-dependencies.
-
-### Basic usage
-
-```bash
-python src/main_add_linkedin_companies_and_employees.py \
-  --user-data-dir="/path/to/chrome/User Data" \
-  --profile-directory="Default" \
-  https://www.linkedin.com/company/example-inc/
-```
-
-If the company is already followed, the script reports `already followed`. If
-not, it will click the **Follow** button and return `follow` after confirming
-the state change. Errors (missing buttons, timeouts, etc.) are reported with a
-helpful reason string. Authentication problems are surfaced as
-`LinkedIn redirected to an authentication wall` or `LinkedIn is showing a login
-form`, letting you know that the referenced Chrome profile is not logged in.
-
-### Reading URLs from a file or STDIN
-
-```bash
-# Read URLs from a file (one URL per line)
-python src/main_add_linkedin_companies_and_employees.py \
-  --user-data-dir="/path/to/chrome/User Data" \
-  --profile-directory="Default" \
-  --input-file company_urls.txt
-
-# Or stream them via STDIN
-cat company_urls.txt | python src/main_add_linkedin_companies_and_employees.py \
-  --user-data-dir="/path/to/chrome/User Data" \
-  --profile-directory="Default"
-```
-
-### JSON output
-
-Use `--output-format json` when the results should be consumed by another
-program:
-
-```bash
-python src/main_add_linkedin_companies_and_employees.py \
-  --user-data-dir="/path/to/chrome/User Data" \
-  --profile-directory="Default" \
-  --output-format json \
-  --input-file company_urls.txt
-```
-
-### Persisting results to disk
-
-Provide `--output-path` to write the rendered output (table or JSON) to a
-specific location. Parent directories are created automatically:
-
-```bash
-python src/main_add_linkedin_companies_and_employees.py \
-  --user-data-dir="/path/to/chrome/User Data" \
-  --profile-directory="Default" \
-  --output-format json \
-  --output-path /var/log/linkedin/results.json \
-  --input-file company_urls.txt
-```
-
-### Custom chromedriver location
-
-If `chromedriver` is not on the `PATH`, point the CLI at the exact binary:
-
-```bash
-python src/main_add_linkedin_companies_and_employees.py \
-  --user-data-dir="/path/to/chrome/User Data" \
-  --profile-directory="Default" \
-  --chromedriver /opt/chromedriver/chromedriver \
-  https://www.linkedin.com/company/example-inc/
-```
-
-### Headless execution
-
-When running through SSH without a display server, enable headless mode:
-
-```bash
-python src/main_add_linkedin_companies_and_employees.py \
-  --user-data-dir="/path/to/chrome/User Data" \
-  --profile-directory="Default" \
-  --headless \
-  --input-file company_urls.txt
-```
-
-Chrome must be recent enough (109+) to support `--headless=new`. If your build
-is older, consider updating Chrome or running the script inside a virtual frame
-buffer (Xvfb).
+- **Output table:** every run ends with a concise `url | status | reason`
+  summary.
+- **CSV audit trail:** `results.csv` can be imported into Sheets/Excel or fed
+  to downstream tools.
+- **Queue persistence:** to add new work, drop more URLs into `Input.txt`; the
+  CLI only reads what’s left.
+- **Extension toggle:** disable it when you browse LinkedIn manually so your
+  own tabs aren’t closed automatically.
+- **Login issues:** if the CLI reports “LinkedIn redirected to a login form,”
+  re-authenticate in Chrome and rerun—the automation reuses the live profile.
 
 ---
 
-## 🧪 Output format
+## 🧱 Legacy Tools (Optional)
 
-By default the CLI prints a fixed-width table:
+The repo still includes:
 
-```
-URL                                                                              | STATUS         | REASON
-------------------------------------------------------------------------------------------------------------------------
-https://www.linkedin.com/company/example-inc/                                    | follow         |
-https://www.linkedin.com/company/already-followed/                               | already followed |
-https://www.linkedin.com/company/missing-company/                                | error          | Follow button not found
-```
+- `src/csv_parser.py`, `src/parser_visitors.py`, `src/main_parse_files.py`
+  – import Mantiks/BuiltWith CSVs into the SQLite DB.
+- `src/db_prospection.py`, `src/main_inspect_db.py`
+  – inspect or script against the database directly.
+- `chrome_plugin/` – now focused on the queue workflow but can be customised
+  (language tweaks, button detection, etc.).
 
-When `--output-format json` is specified, a JSON array is emitted:
-
-```json
-[
-  {"url": "https://www.linkedin.com/company/example-inc/", "status": "follow"},
-  {"url": "https://www.linkedin.com/company/already-followed/", "status": "already followed"},
-  {
-    "url": "https://www.linkedin.com/company/missing-company/",
-    "status": "error",
-    "reason": "Follow button not found"
-  }
-]
-```
-
-The three possible status values are:
-
-- `follow` – the script clicked **Follow** successfully.
-- `already followed` – the page already displayed the **Following** state.
-- `error` – the script could not confirm a follow action (missing button,
-  timeout, or navigation failure). The `reason` field includes more detail.
+These utilities remain useful if you want to keep a structured prospect DB,
+but they’re no longer required for the company follow automation.
 
 ---
 
-## ⚙️ Command-line options
-
-| Flag | Description | Default |
-| ---- | ----------- | ------- |
-| `urls` | Optional positional arguments with LinkedIn company URLs | – |
-| `--input-file` | File with one LinkedIn URL per line | – |
-| `--user-data-dir` | Chrome user data directory that holds a logged-in LinkedIn session | – |
-| `--profile-directory` | Profile directory inside the user data dir (e.g. `Default`, `Profile 1`) | – |
-| `--chrome-binary` | Override the Chrome/Chromium binary location | autodetected |
-| `--headless` | Launch Chrome in headless mode | disabled |
-| `--chromedriver` | Absolute path to the `chromedriver` binary | autodetected |
-| `--page-load-timeout` | Seconds to wait for each page to finish loading | 30 |
-| `--follow-timeout` | Seconds to wait for the follow action to succeed | 20 |
-| `--delay-between` | Delay in seconds between URL navigations | 1.5 |
-| `--output-format` | `table` or `json` | `table` |
-| `--output-path` | File path where the rendered output should be stored | – |
-
-> **Authentication:** Provide `--user-data-dir` (and optionally
-> `--profile-directory`) so Selenium reuses an existing Chrome profile that is
-> already logged into LinkedIn. This avoids storing credentials in the script.
-
----
-
-## 🐳 Docker & On-Prem Hosting Tips
-
-- Mount the Chrome user data directory into the container so the session stays
-  authenticated between runs.
-- Bundle Chrome, `chromedriver`, and the Python dependencies into the image or
-  manage them with infrastructure as code.
-- Use `--output-format json` for easier integration with orchestrators or
-  monitoring tools that capture container logs. Combine with `--output-path`
-  when you want the container to persist the structured results for later
-  inspection.
-
-Example service snippet:
-
-```yaml
-services:
-  linkedin-follow:
-    build: .
-    environment:
-      - DISPLAY= # leave empty for headless mode
-    volumes:
-      - ./chrome-profile:/headless/chrome
-      - ./input/company_urls.txt:/data/company_urls.txt:ro
-    command: >-
-      python src/main_add_linkedin_companies_and_employees.py \
-        --user-data-dir=/headless/chrome \
-        --profile-directory=Default \
-        --headless \
-        --output-format=json \
-        --input-file=/data/company_urls.txt
-```
-
----
-
-## 📦 Legacy Components
-
-The repository still contains the original SQLite-backed workflow and Chrome
-extension. They remain useful for teams that prefer to pre-process CSV files,
-persist state, or run the automation from a local browser. Highlights:
-
-- `src/main_parse_files.py` – Ingest BuiltWith and Mantiks CSV exports into a
-  SQLite database (`prospection_data.db`).
-- `src/db_prospection.py` – Helper functions to query and update the database.
-- `chrome_plugin/` – Chrome extension that clicks the **Follow** button when
-  pages are opened manually.
-
-These modules are optional when using the new Selenium-based CLI but continue
-to function if you rely on the previous workflow.
-
----
-
-## 🧪 Testing helpers
-
-Unit tests live under `tests/` and focus on pure-Python helper functions that
-classify button states. Run them with:
-
-```bash
-python -m unittest discover tests
-```
-
-Browser-level behaviour is best validated manually on a staging LinkedIn
-profile because LinkedIn employs bot-detection heuristics that can block fully
-automated end-to-end tests.
-
----
-
-## 🙋 Support & Contributions
-
-Issues and pull requests are welcome. When contributing, please document any
-new CLI flags or workflow changes in this README so the automation remains easy
-to operate for SSH-based deployments.
-
+**⚡ Happy prospecting! Use responsibly and stay within LinkedIn’s terms of service.**
